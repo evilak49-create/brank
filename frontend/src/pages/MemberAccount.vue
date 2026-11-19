@@ -47,11 +47,6 @@ const relatedPath = computed(() => {
   const type = related.type === 'shop_order' ? 'goods' : 'funds'
   return '/shop/redemptions/' + related.id + '?type=' + type
 })
-const maskedPhone = computed(() => {
-  const phone = props.member?.phone || ''
-  return phone.length > 6 ? phone.slice(0, 3) + ' •••• ' + phone.slice(-4) : '••••'
-})
-
 function date(value) {
   return value ? new Date(value).toLocaleString('pt-BR') : '—'
 }
@@ -147,7 +142,7 @@ onMounted(load)
       <section class="surface stack">
         <div class="member-account-head">
           <span class="member-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 21a7.5 7.5 0 1 1 15 0"/></svg></span>
-          <strong>{{ maskedPhone }}</strong>
+          <strong>{{ member?.phone || '—' }}</strong>
         </div>
         <div class="member-actions">
           <button class="primary" :disabled="working || loading || !checkin || checkin.checked_in" @click="recordCheckin">
