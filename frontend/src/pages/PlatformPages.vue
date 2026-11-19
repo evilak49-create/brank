@@ -677,7 +677,7 @@ onUnmounted(() => {
           </div>
           <div v-if="bindingUsesImage" class="code-row">
             <label class="field">图片验证码
-              <input v-model.trim="code" type="text" pattern="[A-Za-z2-9]{5}" maxlength="5" autocomplete="off" required :disabled="busy">
+              <input v-model.trim="code" type="text" pattern="[A-Za-z2-9]{4}" maxlength="4" autocomplete="off" required :disabled="busy">
             </label>
             <button type="button" class="quiet" :disabled="busy || captchaLoading" @click="refreshBindingCaptcha()" aria-label="换一张验证码">
               <img v-if="bindingCaptcha" :src="bindingCaptcha.image" width="150" height="45" alt="图片验证码">

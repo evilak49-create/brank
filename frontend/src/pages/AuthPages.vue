@@ -155,7 +155,7 @@ async function submit() {
       <div v-if="!signingIn && !created && imageMode && !resetUnavailable" class="field">
         <label for="image-code">图片验证码</label>
         <div class="inline-form">
-          <input id="image-code" v-model="code" autocomplete="off" pattern="[A-Za-z2-9]{5}" maxlength="5" required>
+          <input id="image-code" v-model="code" autocomplete="off" pattern="[A-Za-z2-9]{4}" maxlength="4" required>
           <button class="quiet" type="button" :disabled="imageBusy || busy" @click="refreshCaptcha()" aria-label="换一张验证码">
             <img v-if="challenge" :src="challenge.image" width="150" height="45" alt="图片验证码">
             <span v-else>{{ imageBusy ? '加载中…' : '获取图片' }}</span>
