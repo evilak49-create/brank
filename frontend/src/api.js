@@ -1,4 +1,4 @@
-export async function api(path, { body, signal, method = body === undefined ? 'GET' : 'POST' } = {}) {
+export async function api(path, { body, signal, timeoutMs = 10000, method = body === undefined ? 'GET' : 'POST' } = {}) {
   const multipart = body instanceof FormData
   const headers = { Accept: 'application/json' }
   if (method !== 'GET') {
@@ -14,7 +14,7 @@ export async function api(path, { body, signal, method = body === undefined ? 'G
     if (body !== undefined && !multipart) headers['Content-Type'] = 'application/json'
   }
 
-  const timeout = AbortSignal.timeout(10000)
+  const timeout = AbortSignal.timeout(timeoutMs)
   const response = await fetch('/api/v1' + path, {
     method,
     credentials: 'same-origin',

@@ -11,6 +11,8 @@ const busy = ref(false)
 const error = ref('')
 const copied = ref('')
 const handoff = ref(null)
+const supportName = computed(() => settings.value?.display_name || (props.language === 'pt-BR' ? 'Atendimento CASH CLUB' : 'CASH CLUB 客服'))
+const avatar = computed(() => imageUrl(settings.value?.avatar_url))
 const humanChannels = computed(() => messages.value.findLast(message => message.type === 'human')?.channels ?? settings.value?.channels ?? [])
 const destinations = { '/orders': '/shop/redemptions', '/withdrawals': '/red-packets', '/wallet': '/wallet' }
 watch(() => props.topic, topic => {
@@ -41,7 +43,7 @@ async function ask(text = question.value) {
   busy.value = true
   error.value = ''
   try {
-    const { data } = await api('/support/chat', { body: { question: value, language: props.language } })
+    const { data } = await api('/support/chat', { body: { question: value, language: props.language }, timeoutMs: 18000 })
     messages.value.push({ question: value, ...data })
     question.value = ''
     if (data.type === 'human' && !handoff.value.open) handoff.value.showModal()
@@ -57,8 +59,14 @@ onMounted(load)
 
 <template>
   <div class="shortcut-panel">
+    <header v-if="settings" class="support-heading">
+      <img v-if="avatar" :src="avatar" width="40" height="40" alt="">
+      <div>
+        <strong>{{ supportName }}</strong>
+        <p v-if="settings.description">{{ settings.description }}</p>
+      </div>
+    </header>
     <template v-if="settings?.mode === 'chat'">
-      <strong>AI 客服</strong>
       <p v-if="settings.welcome">{{ settings.welcome }}</p>
       <div v-if="!messages.length" class="chat-suggestions">
         <button v-for="item in settings.suggestions" :key="item.id" class="text-button" :disabled="busy" @click="ask(item.question)">{{ item.question }}</button>
@@ -105,3 +113,9 @@ onMounted(load)
     <p v-if="(!settings && !error) || busy" role="status">正在加载…</p>
   </div>
 </template>
+
+<style scoped>
+.support-heading { display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
+.support-heading img { flex: none; border-radius: 12px; object-fit: cover; }
+.support-heading p { margin: 4px 0 0; color: var(--muted); }
+</style>
