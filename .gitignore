@@ -1,0 +1,15 @@
+# Local partner API reference contains credentials.
+/get.php
+
+# Local project references and prototype images.
+/docs/
+/*.md
+/*.emmx
+/*.png
+/html/assets/
+/html/previews/
+/backend/AGENTS.md
+/backend/CLAUDE.md
+/backend/README.md
+/backend/boost.json
+/backend/public/favicon.ico
