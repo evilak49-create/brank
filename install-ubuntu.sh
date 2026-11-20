@@ -531,20 +531,53 @@ restore_nginx() {
     nginx -t && systemctl reload nginx
 }
 
+abort_nginx_change() {
+    printf '%s\n' "$1" >&2
+    if restore_nginx; then
+        printf '已恢复之前的 Nginx 配置。\n' >&2
+    else
+        printf '未能重新加载原 Nginx 配置，请检查 nginx 服务日志。\n' >&2
+    fi
+    exit 1
+}
+
+wait_for_https() {
+    local attempt status detail
+    for ((attempt=1; attempt<=10; attempt++)); do
+        if status=$(curl --disable -sS --noproxy '*' --connect-to '::127.0.0.1:443' \
+            --connect-timeout 2 --max-time 3 --output "$new_config/health-body" --write-out '%{http_code}' \
+            "https://$authority/api/v1/health" 2>"$new_config/health-error"); then
+            if [[ $status == 200 && $(<"$new_config/health-body") == '{"status":"ok"}' ]]; then return 0; fi
+            detail="HTTPS 返回 HTTP $status，健康接口未返回预期结果。"
+        else
+            detail=$(<"$new_config/health-error")
+        fi
+        if (( attempt < 10 )); then sleep 1; fi
+    done
+    printf '本机 HTTPS 检查未通过（%s）：%s\n' "$authority" "$detail" >&2
+    return 1
+}
+
 changed=false
 if ! cmp -s "$new_config/https-site.conf" "$parts/https-site.conf" ||
     ! cmp -s "$new_config/http-redirect.conf" "$parts/http-redirect.conf"; then
     for file in "${files[@]}"; do
         if [[ -f $parts/$file ]]; then cp -- "$parts/$file" "$new_config/$file.previous"; fi
     done
-    for file in "${files[@]}"; do mv -- "$new_config/$file" "$parts/$file"; done
+    mv -- "$new_config/https-site.conf" "$parts/https-site.conf"
     changed=true
-    if ! nginx -t || ! systemctl reload nginx ||
-        ! curl -fsS --noproxy '*' --connect-to '::127.0.0.1:' --max-time 15 \
-            "https://$authority/api/v1/health" >/dev/null; then
-        restore_nginx
-        printf '新地址 HTTPS 检查失败，已恢复之前的 Nginx 配置。\n' >&2
-        exit 1
+    if ! nginx -t || ! systemctl reload nginx; then
+        abort_nginx_change '无法启用新域名的 Nginx HTTPS 配置。'
+    fi
+    if ! wait_for_https; then
+        abort_nginx_change '新地址的 HTTPS 未就绪，未切换 HTTP 跳转。'
+    fi
+
+    if ! cmp -s "$new_config/http-redirect.conf" "$parts/http-redirect.conf"; then
+        mv -- "$new_config/http-redirect.conf" "$parts/http-redirect.conf"
+        if ! nginx -t || ! systemctl reload nginx; then
+            abort_nginx_change '无法启用新域名的 HTTP 跳转。'
+        fi
     fi
 elif [[ $issued == true ]]; then
     nginx -t
@@ -627,7 +660,7 @@ if [[ $action == --bind-domain ]]; then
     configure_ssl
     systemctl daemon-reload
     step "为 $bind_domain 验证 DNS 并申请证书"
-    "$ssl_helper" "$bind_domain" || die '域名绑定失败，请确认 DNS 指向当前服务器且公网 TCP 80 和 443 已放行。'
+    "$ssl_helper" "$bind_domain" || die '域名绑定失败，请查看上方证书签发或 HTTPS 检查的报错。'
     systemctl enable --now rebates-install-ssl.path rebates-install-ssl.timer
     save_deploy_command
     printf '\n已绑定新的主域名：https://%s/\n后台：https://%s/admin/login\n' "$bind_domain" "$bind_domain"

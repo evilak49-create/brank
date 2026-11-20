@@ -63,3 +63,5 @@ bash -c 'set -e; f=$(mktemp); trap "rm -f -- \"$f\"" EXIT; curl -fsSL --retry 3 
 ```
 
 成功后，新域名成为站点主地址，HTTP 会跳转到新地址的 HTTPS，证书会自动续期。旧地址上的浏览器登录状态不会转移到新域名，请从新域名的 `/admin/login` 重新登录。证书签发或 HTTPS 检查未通过时，现有主地址继续使用。可用 `sudo rebates-deploy --status` 查看站点地址和证书到期时间。
+
+绑定过程中，脚本会等待 Nginx 提供新证书，并在本机 HTTPS 健康检查通过后切换 HTTP 跳转。如果绑定失败，保留终端显示的证书或 HTTP 错误。Nginx 重载日志可用 `sudo journalctl -u nginx -n 60 --no-pager` 查看。
