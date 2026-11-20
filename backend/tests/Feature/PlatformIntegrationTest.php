@@ -7,6 +7,7 @@ use App\Models\AdminRole;
 use App\Models\Member;
 use App\Models\Platform;
 use App\Models\PlatformBinding;
+use App\Models\PointRule;
 use App\Models\User;
 use App\Platforms\PlatformAdministration;
 use Filament\Actions\Testing\TestAction;
@@ -36,6 +37,21 @@ class PlatformIntegrationTest extends TestCase
             ->assertOk()->assertJsonPath('data.0.rating', '4.8')
             ->assertJsonMissingPath('data.0.active_query');
         $this->getJson('/api/v1/platforms/featured')->assertOk()->assertJsonPath('data.0.id', $platform->id);
+        $this->getJson("/api/v1/platforms/{$platform->id}")->assertOk()
+            ->assertJsonPath('data.point_rule.rebate_wager_multiplier', null);
+        PointRule::create([
+            'points_per_brl_micros' => 125000,
+            'wager_multiplier_micros' => 2000000,
+            'rebate_percent_micros' => 3500000,
+            'rebate_wager_multiplier_micros' => 5000000,
+        ]);
+        $this->getJson("/api/v1/platforms/{$platform->id}")->assertOk()
+            ->assertJsonPath('data.point_rule', [
+                'points_per_brl' => '0.125000',
+                'wager_multiplier' => '2.000000',
+                'rebate_percent' => '3.500000',
+                'rebate_wager_multiplier' => '5.000000',
+            ]);
         $this->assertStringNotContainsString('fixture-token', (string) DB::table('platforms')->value('active_query'));
 
         $service->saveQuery($platform, [...$this->queryConfig(), 'token' => 'replacement-token'], $operator);
@@ -60,7 +76,8 @@ class PlatformIntegrationTest extends TestCase
         $this->postJson("/api/v1/platforms/{$platform->id}/binding", ['phone' => '11912345679'])
             ->assertUnprocessable()->assertJsonValidationErrors('code');
         $this->postJson("/api/v1/platforms/{$platform->id}/binding", ['phone' => '+55 (11) 91234-5678'])
-            ->assertCreated()->assertJsonPath('data.platform_account_id', '4000000001');
+            ->assertCreated()->assertJsonPath('data.platform_account_id', '4000000001')
+            ->assertJsonPath('data.protection_status', 'active');
         $this->getJson('/api/v1/platform-bindings')->assertOk()->assertJsonCount(1, 'data');
         $this->assertDatabaseHas('platform_bindings', [
             'member_id' => $first->id, 'platform_id' => $platform->id,

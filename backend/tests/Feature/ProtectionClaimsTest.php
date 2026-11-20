@@ -20,6 +20,7 @@ use GuzzleHttp\Psr7\Utils;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Livewire;
@@ -30,6 +31,30 @@ use Tests\TestCase;
 class ProtectionClaimsTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_protection_default_upgrade_preserves_admin_decisions(): void
+    {
+        $member = $this->member('11912345678');
+        $legacy = $this->binding($member);
+        $manual = $this->binding($member);
+        $inactive = $this->binding($member);
+        $legacy->forceFill(['protection_status' => 'pending'])->save();
+        $manual->forceFill(['protection_status' => 'pending'])->save();
+        DB::table('admin_audits')->insert([
+            'user_id' => User::factory()->create()->id,
+            'member_id' => $member->id,
+            'action' => 'protection.eligibility_changed',
+            'details' => json_encode(['binding_id' => $manual->id, 'old_status' => 'active', 'new_status' => 'pending'], JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+        ]);
+
+        $migration = require database_path('migrations/2026_11_20_000003_default_platform_protection_to_active.php');
+        $migration->up();
+
+        $this->assertSame('active', $legacy->refresh()->protection_status);
+        $this->assertSame('pending', $manual->refresh()->protection_status);
+        $this->assertSame('inactive', $inactive->refresh()->protection_status);
+    }
 
     public function test_existing_binding_can_file_against_a_disabled_platform_and_evidence_is_private(): void
     {

@@ -128,7 +128,7 @@ class PlatformController extends Controller
         $confirmedQuotes = fn (Builder $quotes) => $quotes
             ->where('member_id', $memberId)->whereNotNull('confirmed_at');
 
-        return PlatformBinding::query()->where('member_id', $memberId)->with('platform:id,name,logo_url')
+        return PlatformBinding::query()->where('member_id', $memberId)->with('platform:id,name,logo_url,promotion_url')
             ->withSum(['pointQuotes as redeemed_points' => $confirmedQuotes], 'estimated_points')
             ->withMax(['pointQuotes as last_redeemed_at' => $confirmedQuotes], 'confirmed_at')
             ->withCasts(['last_redeemed_at' => 'datetime']);
@@ -182,6 +182,7 @@ class PlatformController extends Controller
             'platform_id' => $binding->platform_id,
             'platform_name' => $binding->platform->name,
             'logo_url' => $binding->platform->logo_url,
+            'promotion_url' => $binding->platform->promotion_url,
             'masked_platform_account' => ProtectionClaims::maskAccount($binding->platform_account_id),
             ...($includeAccountId ? ['platform_account_id' => $binding->platform_account_id] : []),
             'redeemed_points' => (int) $binding->redeemed_points,

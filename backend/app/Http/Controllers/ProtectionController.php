@@ -30,10 +30,11 @@ class ProtectionController extends Controller
 
     public function bindings(Request $request): JsonResponse
     {
-        $bindings = $this->ownedBindings($request)->with('platform:id,name')->latest('id')->paginate(20);
+        $bindings = $this->ownedBindings($request)->with('platform:id,name,promotion_url')->latest('id')->paginate(20);
 
         return $this->privateJson($bindings->through(fn (PlatformBinding $binding): array => [
             'id' => $binding->id, 'platform_id' => $binding->platform_id, 'platform_name' => $binding->platform->name,
+            'promotion_url' => $binding->platform->promotion_url,
             'masked_platform_account' => ProtectionClaims::maskAccount($binding->platform_account_id),
             'protection_status' => $binding->protection_status,
         ]));

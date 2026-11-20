@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Livewire\Livewire;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class IdentityTest extends TestCase
@@ -53,6 +54,27 @@ class IdentityTest extends TestCase
         $this->postJson('/api/v1/auth/reset-password', [
             'phone' => '11912345678', 'code' => $code, 'password' => 'replacement-pass',
         ])->assertUnprocessable()->assertJsonValidationErrors('code');
+    }
+
+    #[DataProvider('invalidBrazilianMobileNumbers')]
+    public function test_registration_and_sms_reject_invalid_brazilian_mobile_numbers(string $phone): void
+    {
+        $this->postJson('/api/v1/auth/sms-code', ['phone' => $phone, 'purpose' => 'register'])
+            ->assertUnprocessable()->assertJsonValidationErrors('phone');
+        $this->postJson('/api/v1/auth/register', ['phone' => $phone, 'code' => '123456', 'password' => 'example-pass-123'])
+            ->assertUnprocessable()->assertJsonValidationErrors('phone');
+
+        $this->assertDatabaseEmpty('sms_challenges');
+        $this->assertDatabaseEmpty('members');
+    }
+
+    public static function invalidBrazilianMobileNumbers(): iterable
+    {
+        yield 'unassigned DDD' => ['20912345678'];
+        yield 'missing mobile prefix' => ['11812345678'];
+        yield 'too short' => ['1191234567'];
+        yield 'contains letters' => ['11abc912345678'];
+        yield 'foreign country code' => ['+1 11912345678'];
     }
 
     public function test_production_cannot_use_the_development_sms_simulator(): void

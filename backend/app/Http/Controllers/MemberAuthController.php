@@ -46,7 +46,11 @@ class MemberAuthController extends Controller
     public function sendCode(Request $request, SmsChallenges $sms): JsonResponse
     {
         $this->verification->requireSms();
-        $data = $this->validatePhone($request, ['purpose' => 'required|in:register,reset_password']);
+        $data = $this->validatePhone(
+            $request,
+            ['purpose' => 'required|in:register,reset_password'],
+            forRegistration: $request->input('purpose') === 'register',
+        );
         if ($data['purpose'] === 'reset_password' && ($current = Auth::guard('member')->user()) instanceof Member) {
             $this->validateResetAccount($request, $current->refresh(), $data['phone']);
         }
@@ -62,7 +66,7 @@ class MemberAuthController extends Controller
             ...$this->challengeRules($useSms),
             'password' => MemberPassword::RULE,
             'invite_code' => ['nullable', 'string', 'regex:/\A[0-9a-fA-F]{32}\z/'],
-        ]);
+        ], forRegistration: true);
         MemberPassword::validateBytes($data['password']);
         if (! $useSms) {
             $captcha->consume($request->session()->getId(), 'register', $data['challenge_id'], $data['code']);
@@ -191,11 +195,14 @@ class MemberAuthController extends Controller
         }
     }
 
-    private function validatePhone(Request $request, array $rules): array
+    private function validatePhone(Request $request, array $rules, bool $forRegistration = false): array
     {
-        $request->merge(['phone' => MemberPhone::normalize($request->input('phone'))]);
+        $request->merge(['phone' => MemberPhone::normalize($request->input('phone'), allowBareCountryCode: $forRegistration)]);
 
-        return $request->validate(['phone' => ['required', MemberPhone::RULE], ...$rules]);
+        return $request->validate(
+            ['phone' => ['required', $forRegistration ? MemberPhone::REGISTRATION_RULE : MemberPhone::RULE], ...$rules],
+            $forRegistration ? ['phone.required' => MemberPhone::REGISTRATION_MESSAGE, 'phone.regex' => MemberPhone::REGISTRATION_MESSAGE] : [],
+        );
     }
 
     private function memberData(Member $member): array
