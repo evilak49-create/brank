@@ -1,9 +1,14 @@
 <script setup>
+import { createRequestId } from '../requestId.js'
+import { useLocale } from '../locale.js'
+
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import { formatBrl, parseBrl } from '../money'
 import { go } from '../navigation'
 import MemberPagination from './MemberPagination.vue'
+
+const { locale, t } = useLocale()
 
 const props = defineProps({ member: Object })
 const emit = defineEmits(['refresh-member'])
@@ -54,7 +59,7 @@ async function submit() {
   error.value = ''
   message.value = ''
   if (attempt?.amount !== requested) {
-    attempt = { amount: requested, id: crypto.randomUUID() }
+    attempt = { amount: requested, id: createRequestId() }
     try { sessionStorage.setItem(attemptKey, JSON.stringify(attempt)) } catch {}
   }
   try {
@@ -77,36 +82,36 @@ onMounted(() => load())
 
 <template>
   <div class="stack" :aria-busy="busy">
-    <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <p v-if="message" role="status">{{ message }}</p>
-    <button v-if="error && !pending" type="button" class="quiet" :disabled="loading" @click="load()">刷新余额与记录</button>
-    <p v-if="loading && !wallet" class="muted" role="status">正在加载余额…</p>
+    <p v-if="error" class="form-error" role="alert">{{ t(error) }}</p>
+    <p v-if="message" role="status">{{ t(message) }}</p>
+    <button v-if="error && !pending" type="button" class="quiet" :disabled="loading" @click="load()">{{ t('刷新余额与记录') }}</button>
+    <p v-if="loading && !wallet" class="muted" role="status">{{ t('正在加载余额…') }}</p>
 
     <section v-if="wallet" class="surface stack">
       <dl class="summary-list">
-        <div><dt>可用余额</dt><dd>{{ formatBrl(wallet.available_balance_cents) }}</dd></div>
-        <div v-if="wallet.held_balance_cents > 0"><dt>提现处理中</dt><dd>{{ formatBrl(wallet.held_balance_cents) }}</dd></div>
-        <div v-if="wallet.masked_cpf"><dt>Pix 收款账户</dt><dd>{{ wallet.masked_cpf }}</dd></div>
+        <div><dt>{{ t('可用余额') }}</dt><dd>{{ formatBrl(wallet.available_balance_cents) }}</dd></div>
+        <div v-if="wallet.held_balance_cents > 0"><dt>{{ t('提现处理中') }}</dt><dd>{{ formatBrl(wallet.held_balance_cents) }}</dd></div>
+        <div v-if="wallet.masked_cpf"><dt>{{ t('Pix 收款账户') }}</dt><dd>{{ wallet.masked_cpf }}</dd></div>
       </dl>
-      <button v-if="!wallet.masked_cpf" type="button" class="primary" @click="go('/pix?next=%2Fcash-wallet')">绑定 Pix 收款账户</button>
+      <button v-if="!wallet.masked_cpf" type="button" class="primary" @click="go('/pix?next=%2Fcash-wallet')">{{ t('绑定 Pix 收款账户') }}</button>
       <form v-else class="stack" @submit.prevent="submit">
-        <label class="field">提现金额（BRL）
+        <label class="field">{{ t('提现金额（BRL）') }}
           <input v-model="amount" maxlength="18" inputmode="decimal" autocomplete="off" :disabled="busy" required>
         </label>
-        <p v-if="amount && (!cents || cents > wallet.available_balance_cents)" class="muted">请输入不超过可用余额的金额，最多两位小数。</p>
-        <button class="primary" :disabled="busy || !cents || cents > wallet.available_balance_cents">{{ pending ? '正在提交…' : '确认申请提现' }}</button>
+        <p v-if="amount && (!cents || cents > wallet.available_balance_cents)" class="muted">{{ t('请输入不超过可用余额的金额，最多两位小数。') }}</p>
+        <button class="primary" :disabled="busy || !cents || cents > wallet.available_balance_cents">{{ pending ? t('正在提交…') : t('确认申请提现') }}</button>
       </form>
     </section>
 
     <section v-if="history" class="surface stack">
       <div class="member-actions">
-        <h2>余额提现记录</h2>
-        <button class="quiet" type="button" @click="go('/withdrawal-history')">全部提现记录</button>
+        <h2>{{ t('余额提现记录') }}</h2>
+        <button class="quiet" type="button" @click="go('/withdrawal-history')">{{ t('全部提现记录') }}</button>
       </div>
-      <p v-if="!history.data.length" class="muted">暂无余额提现记录。</p>
+      <p v-if="!history.data.length" class="muted">{{ t('暂无余额提现记录。') }}</p>
       <article v-for="order in history.data" :key="order.id" class="stack">
-        <strong>{{ formatBrl(order.amount_cents) }} · {{ statuses[order.status] || order.status }}</strong>
-        <time class="muted" :datetime="order.created_at">{{ new Date(order.created_at).toLocaleString('pt-BR') }}</time>
+        <strong>{{ formatBrl(order.amount_cents) }} · {{ t(statuses[order.status]) || order.status }}</strong>
+        <time class="muted" :datetime="order.created_at">{{ new Date(order.created_at).toLocaleString(locale) }}</time>
         <p v-if="order.review_reason">{{ order.review_reason }}</p>
       </article>
       <MemberPagination :page="history" :busy="busy" @page="load" />

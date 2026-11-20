@@ -11,10 +11,21 @@ const busy = ref(false)
 const error = ref('')
 const copied = ref('')
 const handoff = ref(null)
+const labels = computed(() => props.language === 'pt-BR' ? {
+  records: 'Ver meus registros', contact: 'Atendimento humano', close: 'Fechar', copy: 'Copiar',
+  copied: 'Contato copiado.', copyFailed: 'Não foi possível copiar. Selecione e copie o contato manualmente.',
+  unavailable: 'O atendimento está indisponível no momento. Tente novamente.',
+  noHuman: 'O atendimento humano está indisponível.', retry: 'Tentar novamente', loading: 'Carregando…',
+} : {
+  records: '查看个人记录', contact: '联系人工客服', close: '关闭', copy: '复制',
+  copied: '已复制联系方式。', copyFailed: '无法自动复制，请手动选择联系方式。',
+  unavailable: '客服暂不可用，请稍后重试。',
+  noHuman: '人工客服暂不可用。', retry: '重试', loading: '正在加载…',
+})
 const supportName = computed(() => settings.value?.display_name || (props.language === 'pt-BR' ? 'Atendimento CASH CLUB' : 'CASH CLUB 客服'))
 const avatar = computed(() => imageUrl(settings.value?.avatar_url))
 const humanChannels = computed(() => messages.value.findLast(message => message.type === 'human')?.channels ?? settings.value?.channels ?? [])
-const destinations = { '/orders': '/shop/redemptions', '/withdrawals': '/red-packets', '/wallet': '/wallet' }
+const destinations = { '/orders': '/shop/redemptions', '/withdrawals': '/withdrawal-history', '/wallet': '/wallet' }
 watch(() => props.topic, topic => {
   if (topic && !question.value.trim()) question.value = topic.slice(0, 500)
 }, { immediate: true })
@@ -22,9 +33,9 @@ watch(() => props.topic, topic => {
 async function copyContact(channel) {
   try {
     await navigator.clipboard.writeText(channel.contact)
-    copied.value = '已复制 ' + channel.name
+    copied.value = labels.value.copied
   } catch {
-    copied.value = '无法自动复制，请手动选择联系方式。'
+    copied.value = labels.value.copyFailed
   }
 }
 
@@ -33,7 +44,7 @@ async function load() {
   try {
     settings.value = (await api('/support?' + new URLSearchParams({ language: props.language }))).data
   } catch (failure) {
-    error.value = failure.message
+    error.value = props.language === 'pt-BR' ? labels.value.unavailable : failure.message
   }
 }
 
@@ -43,13 +54,19 @@ async function ask(text = question.value) {
   busy.value = true
   error.value = ''
   try {
-    const { data } = await api('/support/chat', { body: { question: value, language: props.language }, timeoutMs: 18000 })
+    const history = messages.value.filter(turn => turn.answer?.trim()).slice(-6).map(turn => ({
+      question: turn.question,
+      answer: Array.from(turn.answer).slice(0, 1400).join(''),
+    }))
+    const { data } = await api('/support/chat', {
+      body: { question: value, language: props.language, history }, timeoutMs: 18000,
+    })
     messages.value.push({ question: value, ...data })
     question.value = ''
     if (data.type === 'human' && !handoff.value.open) handoff.value.showModal()
   } catch (failure) {
     question.value = value
-    error.value = failure.message
+    error.value = props.language === 'pt-BR' ? labels.value.unavailable : failure.message
   } finally {
     busy.value = false
   }
@@ -76,7 +93,7 @@ onMounted(load)
           <p class="chat-question">{{ message.question }}</p>
           <p>{{ message.answer }}</p>
           <button v-if="message.help" class="text-button" @click="emit('follow', message.help.link)">{{ message.help.title }} →</button>
-          <button v-if="message.type === 'personal'" class="text-button" @click="emit('account', destinations[message.link])">查看个人记录 →</button>
+          <button v-if="message.type === 'personal'" class="text-button" @click="emit('account', destinations[message.link])">{{ labels.records }} →</button>
         </article>
       </div>
       <form class="search" @submit.prevent="ask()">
@@ -85,32 +102,32 @@ onMounted(load)
       </form>
     </template>
     <p v-else-if="settings">{{ settings.answer }}</p>
-    <button v-if="settings?.mode === 'chat' && humanChannels.length" class="quiet" @click="handoff.showModal()">联系人工客服</button>
+    <button v-if="settings?.mode === 'chat' && humanChannels.length" class="quiet" @click="handoff.showModal()">{{ labels.contact }}</button>
     <ul v-if="settings && settings.mode !== 'chat' && humanChannels.length" class="channels row-list">
       <li v-for="(channel, index) in humanChannels" :key="index" class="channel-row">
         <a v-if="imageUrl(channel.url)" :href="imageUrl(channel.url)" target="_blank" rel="noopener noreferrer">{{ channel.name }}</a>
         <strong v-else>{{ channel.name }}</strong>
         <span v-if="channel.contact">{{ channel.contact }}</span>
-        <button v-if="channel.contact" class="text-button" @click="copyContact(channel)">复制</button>
+        <button v-if="channel.contact" class="text-button" @click="copyContact(channel)">{{ labels.copy }}</button>
       </li>
     </ul>
     <p v-if="copied" role="status">{{ copied }}</p>
     <dialog ref="handoff" aria-labelledby="handoff-title">
-      <div class="panel-header"><h2 id="handoff-title">联系人工客服</h2><form method="dialog"><button class="close-button" aria-label="关闭">×</button></form></div>
+      <div class="panel-header"><h2 id="handoff-title">{{ labels.contact }}</h2><form method="dialog"><button class="close-button" :aria-label="labels.close">×</button></form></div>
       <ul v-if="humanChannels.length" class="channels row-list">
         <li v-for="(channel, index) in humanChannels" :key="index" class="channel-row">
           <a v-if="imageUrl(channel.url)" :href="imageUrl(channel.url)" target="_blank" rel="noopener noreferrer">{{ channel.name }}</a>
           <strong v-else>{{ channel.name }}</strong>
           <span v-if="channel.contact">{{ channel.contact }}</span>
-          <button v-if="channel.contact" class="text-button" @click="copyContact(channel)">复制</button>
+          <button v-if="channel.contact" class="text-button" @click="copyContact(channel)">{{ labels.copy }}</button>
         </li>
       </ul>
-      <p v-else>人工客服暂不可用。</p>
+      <p v-else>{{ labels.noHuman }}</p>
       <p v-if="copied" role="status">{{ copied }}</p>
     </dialog>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-    <button v-if="error && !settings" class="text-button" @click="load">重试</button>
-    <p v-if="(!settings && !error) || busy" role="status">正在加载…</p>
+    <button v-if="error && !settings" class="text-button" @click="load">{{ labels.retry }}</button>
+    <p v-if="(!settings && !error) || busy" role="status">{{ labels.loading }}</p>
   </div>
 </template>
 

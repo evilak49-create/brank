@@ -1,8 +1,13 @@
 <script setup>
+import { createRequestId } from '../requestId.js'
+import { useLocale } from '../locale.js'
+
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import { currentRoute, go, resume, safePath } from '../navigation'
 import MemberPagination from './MemberPagination.vue'
+
+const { locale, t } = useLocale()
 
 const props = defineProps({ route: Object, member: Object })
 const path = props.route.path
@@ -44,7 +49,7 @@ const openKey = 'cash-club:red-packet-open:' + props.member?.id
 const attempts = new Map()
 
 function date(value) {
-  return value ? new Date(value).toLocaleString('pt-BR') : '—'
+  return value ? new Date(value).toLocaleString(locale.value) : '—'
 }
 
 function money(value) {
@@ -65,7 +70,7 @@ function getAttempt(key) {
     if (previous) return previous
   } catch {}
   if (attempts.has(key)) return attempts.get(key)
-  const id = crypto.randomUUID()
+  const id = createRequestId()
   attempts.set(key, id)
   try { sessionStorage.setItem(key, id) } catch {}
   return id
@@ -132,7 +137,7 @@ async function open() {
       return
     }
     packets.value = { ...packets.value, round: data }
-    info.value = '已拆开红包，初始奖励 ' + money(data.initial_cents) + '。'
+    info.value = t('已拆开红包，初始奖励 ') + money(data.initial_cents) + t('。', '.')
   } catch (failure) {
     showError(failure)
   } finally {
@@ -155,7 +160,7 @@ async function copyInvite() {
 async function shareInvite() {
   if (!inviteLink.value) return
   if (navigator.share) {
-    try { await navigator.share({ title: pageCopy.value?.opening_title || '现金红包邀请', url: inviteLink.value }); return }
+    try { await navigator.share({ title: t(pageCopy.value?.opening_title || '现金红包邀请'), url: inviteLink.value }); return }
     catch (failure) { if (failure.name === 'AbortError') return }
   }
   linkVisible.value = true
@@ -234,53 +239,53 @@ onMounted(load)
           <circle cx="60" cy="64" r="15" fill="#f9cd7e"/>
           <path d="M60 55v18m-8-9h16" stroke="#a85e42" stroke-width="2.5" stroke-linecap="round"/>
         </svg>
-        <h2>{{ pageCopy?.opening_title || '现金红包' }}</h2>
+        <h2>{{ t(pageCopy?.opening_title || '现金红包') }}</h2>
         <p v-if="pageCopy?.opening_description" class="reward-opening-description">{{ pageCopy.opening_description }}</p>
-        <div class="member-actions"><button class="primary" :disabled="working" @click="open">{{ working ? '正在拆开…' : (pageCopy?.open_label || '拆开红包') }}</button></div>
+        <div class="member-actions"><button class="primary" :disabled="working" @click="open">{{ working ? t('正在拆开…') : t(pageCopy?.open_label || '拆开红包') }}</button></div>
       </section>
 
       <section v-else-if="round" class="surface member-hero stack">
-        <h2>{{ pageCopy?.balance_title || '本轮红包' }}</h2>
+        <h2>{{ t(pageCopy?.balance_title || '本轮红包') }}</h2>
         <strong>{{ money(round.balance_cents) }}</strong>
-        <progress class="member-progress" :value="round.balance_cents" :max="round.threshold_cents" aria-label="提现进度"></progress>
-        <p>提现目标 {{ money(round.threshold_cents) }}</p>
-        <p v-if="round.frozen_cents > 0">提现处理中 · {{ money(round.frozen_cents) }}</p>
-        <p v-else-if="round.remaining_cents > 0">还差 {{ money(round.remaining_cents) }} 可提现</p>
-        <p v-else>已达到提现目标</p>
+        <progress class="member-progress" :value="round.balance_cents" :max="round.threshold_cents" :aria-label="t('提现进度')"></progress>
+        <p>{{ t('提现目标') }} {{ money(round.threshold_cents) }}</p>
+        <p v-if="round.frozen_cents > 0">{{ t('提现处理中 ·') }} {{ money(round.frozen_cents) }}</p>
+        <p v-else-if="round.remaining_cents > 0">{{ t('还差') }} {{ money(round.remaining_cents) }} {{ t('可提现') }}</p>
+        <p v-else>{{ t('已达到提现目标') }}</p>
         <div class="member-actions">
-          <button class="primary" :disabled="!ready" @click="go(withdraw)">申请提现</button>
-          <button class="quiet" :disabled="!inviteLink" @click="shareInvite">{{ pageCopy?.invite_label || '邀请好友' }}</button>
-          <button class="quiet" :disabled="!inviteLink" @click="copyInvite">复制链接</button>
-          <button class="quiet" @click="go(home + '/invites')">邀请明细</button>
+          <button class="primary" :disabled="!ready" @click="go(withdraw)">{{ t('申请提现') }}</button>
+          <button class="quiet" :disabled="!inviteLink" @click="shareInvite">{{ t(pageCopy?.invite_label || '邀请好友') }}</button>
+          <button class="quiet" :disabled="!inviteLink" @click="copyInvite">{{ t('复制链接') }}</button>
+          <button class="quiet" @click="go(home + '/invites')">{{ t('邀请明细') }}</button>
         </div>
-        <label v-if="linkVisible" class="field">邀请链接
+        <label v-if="linkVisible" class="field">{{ t('邀请链接') }}
           <input ref="inviteInput" :value="inviteLink" readonly @focus="$event.target.select()">
         </label>
       </section>
 
-      <p v-if="info" class="surface" role="status">{{ info }}</p>
+      <p v-if="info" class="surface" role="status">{{ t(info) }}</p>
 
       <section v-if="pageCopy?.rules_html" class="surface stack">
         <details>
-          <summary>{{ pageCopy.rules_title }}</summary>
-          <div class="reward-rule-copy" v-html="pageCopy.rules_html"></div>
+          <summary>{{ t(pageCopy.rules_title) }}</summary>
+          <div class="reward-rule-copy" v-html="t(pageCopy.rules_html)"></div>
         </details>
       </section>
 
       <section v-if="records" class="surface stack">
         <div class="member-actions">
-          <h2>红包提现记录</h2>
-          <button class="quiet" type="button" @click="go('/withdrawal-history')">全部提现记录</button>
+          <h2>{{ t('红包提现记录') }}</h2>
+          <button class="quiet" type="button" @click="go('/withdrawal-history')">{{ t('全部提现记录') }}</button>
         </div>
         <ul v-if="records.data.length" class="row-list">
           <li v-for="record in records.data" :key="record.id">
             <button @click="go(home + '/withdrawals/' + record.id)">
               <span><strong>{{ money(record.amount_cents) }}</strong><small>{{ date(record.created_at) }}</small></span>
-              <span>{{ statuses[record.status] || record.status }} ›</span>
+              <span>{{ t(statuses[record.status]) || record.status }} ›</span>
             </button>
           </li>
         </ul>
-        <p v-else class="muted">暂无提现记录。</p>
+        <p v-else class="muted">{{ t('暂无提现记录。') }}</p>
         <MemberPagination :page="records" :busy="loading" @page="pageLink" />
       </section>
     </template>
@@ -290,67 +295,67 @@ onMounted(load)
         <label class="field">CPF
           <input v-model="cpf" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" maxlength="14" required :disabled="working">
         </label>
-        <p class="muted">请填写已注册为 Pix 收款键的 CPF。</p>
+        <p class="muted">{{ t('请填写已注册为 Pix 收款键的 CPF。') }}</p>
         <div class="member-actions">
-          <button class="primary" :disabled="working">{{ working ? '正在保存…' : '保存' }}</button>
-          <button class="quiet" type="button" :disabled="working" @click="cancelPixEdit">取消</button>
+          <button class="primary" :disabled="working">{{ working ? t('正在保存…') : t('保存') }}</button>
+          <button class="quiet" type="button" :disabled="working" @click="cancelPixEdit">{{ t('取消') }}</button>
         </div>
       </form>
       <template v-else-if="account">
         <p v-if="account.masked_cpf">CPF · {{ account.masked_cpf }}</p>
-        <p v-else class="muted">尚未绑定 Pix 收款账户。</p>
+        <p v-else class="muted">{{ t('尚未绑定 Pix 收款账户。') }}</p>
         <div class="member-actions">
-          <button class="primary" @click="editing = true; info = ''">{{ account.masked_cpf ? '更换 CPF' : '绑定 Pix' }}</button>
-          <button v-if="next === withdraw" class="quiet" @click="resume(home)">返回红包</button>
+          <button class="primary" @click="editing = true; info = ''">{{ account.masked_cpf ? t('更换 CPF') : t('绑定 Pix') }}</button>
+          <button v-if="next === withdraw" class="quiet" @click="resume(home)">{{ t('返回红包') }}</button>
         </div>
       </template>
-      <p v-if="info" role="status">{{ info }}</p>
+      <p v-if="info" role="status">{{ t(info) }}</p>
     </section>
 
     <section v-else-if="isWithdraw" class="surface stack">
-      <h2>确认提现</h2>
+      <h2>{{ t('确认提现') }}</h2>
       <template v-if="ready && account?.masked_cpf">
         <dl class="member-definition">
-          <div><dt>提现金额</dt><dd>{{ money(round.available_cents) }}</dd></div>
-          <div><dt>收款方式</dt><dd>Pix</dd></div>
+          <div><dt>{{ t('提现金额') }}</dt><dd>{{ money(round.available_cents) }}</dd></div>
+          <div><dt>{{ t('收款方式') }}</dt><dd>Pix</dd></div>
           <div><dt>CPF</dt><dd>{{ account.masked_cpf }}</dd></div>
         </dl>
-        <button class="primary" :disabled="working || loading" @click="confirmWithdrawal">{{ working ? '正在确认…' : '确认提现' }}</button>
+        <button class="primary" :disabled="working || loading" @click="confirmWithdrawal">{{ working ? t('正在确认…') : t('确认提现') }}</button>
       </template>
-      <p v-else-if="packets && !loading" class="muted">当前没有可提现的红包余额。</p>
-      <button class="quiet" :disabled="working" @click="resume(home)">返回红包</button>
+      <p v-else-if="packets && !loading" class="muted">{{ t('当前没有可提现的红包余额。') }}</p>
+      <button class="quiet" :disabled="working" @click="resume(home)">{{ t('返回红包') }}</button>
     </section>
 
     <section v-else-if="isInvites" class="surface stack">
       <ul v-if="records?.data.length" class="row-list">
         <li v-for="invite in records.data" :key="invite.id" class="member-invite-row">
-          <span><strong>{{ invite.settled_at ? '已结算' : '待结算' }}</strong><small>{{ date(invite.registered_at) }}</small></span>
+          <span><strong>{{ invite.settled_at ? t('已结算') : t('待结算') }}</strong><small>{{ date(invite.registered_at) }}</small></span>
           <span class="member-positive">{{ invite.settled_at ? '+' + money(invite.reward_cents) : '—' }}</span>
         </li>
       </ul>
-      <p v-else-if="records" class="muted">暂无邀请记录。</p>
+      <p v-else-if="records" class="muted">{{ t('暂无邀请记录。') }}</p>
       <MemberPagination :page="records" :busy="loading" @page="pageLink" />
     </section>
 
     <section v-else-if="order" class="surface stack">
       <dl class="member-definition">
-        <div><dt>订单号</dt><dd>{{ order.order_number }}</dd></div>
-        <div><dt>申请金额</dt><dd>{{ money(order.amount_cents) }}</dd></div>
+        <div><dt>{{ t('订单号') }}</dt><dd>{{ order.order_number }}</dd></div>
+        <div><dt>{{ t('申请金额') }}</dt><dd>{{ money(order.amount_cents) }}</dd></div>
         <div><dt>Pix CPF</dt><dd>{{ order.masked_cpf }}</dd></div>
-        <div><dt>申请时间</dt><dd>{{ date(order.created_at) }}</dd></div>
-        <div><dt>处理状态</dt><dd>{{ statuses[order.status] || order.status }}</dd></div>
-        <div v-if="order.paid_at"><dt>到账时间</dt><dd>{{ date(order.paid_at) }}</dd></div>
-        <div v-if="order.review_reason"><dt>处理说明</dt><dd>{{ order.review_reason }}</dd></div>
+        <div><dt>{{ t('申请时间') }}</dt><dd>{{ date(order.created_at) }}</dd></div>
+        <div><dt>{{ t('处理状态') }}</dt><dd>{{ t(statuses[order.status]) || order.status }}</dd></div>
+        <div v-if="order.paid_at"><dt>{{ t('到账时间') }}</dt><dd>{{ date(order.paid_at) }}</dd></div>
+        <div v-if="order.review_reason"><dt>{{ t('处理说明') }}</dt><dd>{{ order.review_reason }}</dd></div>
       </dl>
       <div v-if="['failed', 'rejected'].includes(order.status)" class="member-actions">
-        <button class="quiet" @click="go('/pix')">核对收款账户</button>
-        <button class="quiet" @click="go(home)">返回红包</button>
+        <button class="quiet" @click="go('/pix')">{{ t('核对收款账户') }}</button>
+        <button class="quiet" @click="go(home)">{{ t('返回红包') }}</button>
       </div>
     </section>
-    <p v-if="loading" role="status" class="muted">正在加载…</p>
+    <p v-if="loading" role="status" class="muted">{{ t('正在加载…') }}</p>
     <div v-if="error" class="stack">
-      <p class="error" role="alert">{{ error }}</p>
-      <button v-if="!working && !editing && (isHome || !round) && !order" class="quiet" @click="load">重新加载</button>
+      <p class="error" role="alert">{{ t(error) }}</p>
+      <button v-if="!working && !editing && (isHome || !round) && !order" class="quiet" @click="load">{{ t('重新加载') }}</button>
     </div>
   </div>
 </template>
