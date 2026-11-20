@@ -46,6 +46,31 @@
 .platform-content, .guest-panel { padding: 15px; }
 .platform-content h2, .guest-panel h2 { font-size: 17px; }
 .platform-hero { display: flex; align-items: center; gap: 13px; padding: 14px; }
+.platform-rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, auto);
+  grid-auto-flow: column;
+  gap: 5px 10px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #62518a80;
+  border-radius: 10px;
+  background: #242238;
+  font-size: 11px;
+}
+.platform-rules > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 1px 5px; }
+.platform-rules > div:nth-child(n+3) { border-inline-start: 1px solid #a691cf38; padding-inline-start: 10px; }
+.platform-rules dt { color: #f0eaff; font-weight: 700; }
+.platform-rules dd {
+  margin: 0;
+  color: #82ffd1;
+  font-size: 13px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.platform-rules > div:nth-child(n+3) dd { color: #ffe281; }
 .platform-heading { min-width: 0; }
 .platform-heading h1 { font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
 .minor { font-size: 12px; }

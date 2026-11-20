@@ -37,6 +37,8 @@ const reviewListError = ref('')
 const reviewPage = ref(1)
 const reviewLastPage = ref(1)
 const favorite = ref(false)
+const pointRule = ref(null)
+const pointRuleError = ref(false)
 const tab = ref('reviews')
 const search = ref('')
 const listPage = ref(1)
@@ -68,6 +70,7 @@ let disposed = false
 const ticker = window.setInterval(() => { now.value = Date.now() }, 1000)
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 const date = computed(() => new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }))
+const ruleNumbers = computed(() => new Intl.NumberFormat(locale.value, { maximumFractionDigits: 6 }))
 const bindingStatuses = { pending: '待确认', active: '已生效', inactive: '未生效' }
 const eligibility = {
   eligible: '已达到投注要求',
@@ -107,6 +110,20 @@ const promotion = computed(() => {
 
 function formatDate(value) {
   return value ? date.value.format(new Date(value)) : t('暂无记录')
+}
+
+function formatRule(value, suffix) {
+  return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : ruleNumbers.value.format(value) + suffix
+}
+
+async function loadPointRule(path = platformPath.value, signal = loadRequest.signal) {
+  pointRuleError.value = false
+  try {
+    const { data } = await api(path + '/point-rule', { signal, fresh: true })
+    if (!signal.aborted) pointRule.value = data
+  } catch {
+    if (!signal.aborted) pointRuleError.value = true
+  }
 }
 
 function formatMoney(cents) {
@@ -258,6 +275,8 @@ async function initialize() {
   const path = platformPath.value
   const mode = screen.value
   platform.value = null
+  pointRule.value = null
+  pointRuleError.value = false
   terms.value = null
   selected.value = null
   bindingDetail.value = null
@@ -342,7 +361,7 @@ async function initialize() {
         const posted = props.route.query.get('review')
         if (posted === 'pending') status.value = '评价已提交，审核通过后将公开展示。'
         if (posted === 'approved') status.value = '评价已发布。'
-        const tasks = [loadPlatformReviews(1, path, signal)]
+        const tasks = [loadPlatformReviews(1, path, signal), loadPointRule(path, signal)]
         if (props.member) tasks.push(api('/platform-favorites/' + platform.value.id, { signal }).then(result => {
           if (!signal.aborted) favorite.value = result.data.favorite
         }).catch(failure => {
@@ -545,6 +564,13 @@ onUnmounted(() => {
         <div><h2>{{ t('出款保障') }}</h2><p>{{ t('符合保障条款的拒绝出款申诉，经核实后由本站赔付。') }}</p></div>
         <button class="quiet" type="button" @click="go(platformPath + '/protection')">{{ t('查看条款') }}</button>
       </section>
+      <dl v-if="!pointRuleError" class="platform-rules" :aria-label="t('积分与返利规则', 'Regras de pontos e cashback')">
+        <div><dt>{{ t('积分比例', 'Pontos por real') }}</dt><dd>{{ formatRule(pointRule?.points_per_brl, ' / R$ 1') }}</dd></div>
+        <div><dt>{{ t('投注要求', 'Apostas para pontos') }}</dt><dd>{{ formatRule(pointRule?.wager_multiplier, '×') }}</dd></div>
+        <div><dt>{{ t('返利比例', 'Percentual de cashback') }}</dt><dd>{{ formatRule(pointRule?.rebate_percent, '%') }}</dd></div>
+        <div><dt>{{ t('流水要求', 'Apostas para cashback') }}</dt><dd>{{ formatRule(pointRule?.rebate_wager_multiplier, '×') }}</dd></div>
+      </dl>
+      <button v-else class="quiet" type="button" @click="loadPointRule()">{{ t('规则加载失败，点击重试', 'Regras indisponíveis. Tentar novamente') }}</button>
       <nav class="segmented platform-tabs" :aria-label="t('平台详情')">
         <button v-for="[value, label] in [['reviews', t('用户评价')], ['description', t('平台简介')], ['offers', t('优惠活动')]]" :key="value" type="button" :aria-pressed="tab === value" @click="tab = value">{{ label }}</button>
       </nav>
