@@ -65,6 +65,7 @@ class ProtectionClaimsTest extends TestCase
 
         $this->getJson('/api/v1/protection/bindings')->assertOk()
             ->assertJsonPath('data.0.protection_status', 'inactive')
+            ->assertJsonPath('data.0.logo_url', '/uploads/images/protection-platform.png')
             ->assertJsonPath('data.0.masked_platform_account', '****4567');
         $payload = $this->payload($binding);
         $claim = $this->post('/api/v1/protection/claims', $payload, ['Accept' => 'application/json'])
@@ -206,7 +207,7 @@ class ProtectionClaimsTest extends TestCase
     private function binding(Member $member): PlatformBinding
     {
         $platform = Platform::create(['name' => '保障平台', 'promotion_url' => 'https://example.test', 'rating' => '4.0']);
-        $platform->forceFill(['manually_disabled' => true])->save();
+        $platform->forceFill(['manually_disabled' => true, 'logo_url' => '/uploads/images/protection-platform.png'])->save();
         $binding = PlatformBinding::create([
             'member_id' => $member->id, 'platform_id' => $platform->id, 'platform_account_id' => '1234567',
             'query_phone' => $member->phone,
