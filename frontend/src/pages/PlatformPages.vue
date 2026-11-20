@@ -157,8 +157,10 @@ async function listPlatforms(page = 1) {
   listingError.value = ''
   const keyword = search.value.trim()
   const { key } = props.route
+  const isBinding = screen.value === 'bind'
+  const path = isBinding ? '/platforms/bindable' : '/platforms'
   try {
-    const result = await api('/platforms?' + new URLSearchParams({ search: keyword, page }), { signal: controller.signal })
+    const result = await api(path + '?' + new URLSearchParams({ search: keyword, page }), { signal: controller.signal, fresh: isBinding })
     if (controller.signal.aborted) return
     directory.value = page === 1 ? result.data : [...directory.value, ...result.data]
     listPage.value = result.current_page
@@ -207,7 +209,7 @@ async function loadBindings(signal, allPages = false) {
   let currentPage = 1
   let result
   do {
-    result = await api('/platform-bindings?page=' + currentPage, { signal })
+    result = await api('/platform-bindings?page=' + currentPage, { signal, fresh: screen.value === 'bind' })
     items.push(...result.data)
     currentPage++
   } while (allPages && currentPage <= result.last_page)
@@ -308,6 +310,10 @@ async function initialize() {
       const preset = ownBindings.value.find(item => mode === 'points'
         ? String(item.id) === bindingId || (platformId && String(item.platform_id) === platformId)
         : String(item.platform_id) === platformId)
+      if (mode === 'bind' && preset) {
+        go('/bindings/' + preset.id, { replace: true })
+        return
+      }
       if (preset) choose(bindingPlatform(preset))
       else if (/^\d+$/.test(platformId ?? '')) {
         const result = await api('/platforms/' + platformId, { signal })
@@ -655,7 +661,7 @@ onUnmounted(() => {
             <p class="error" role="alert">{{ listingError }}</p>
             <button class="quiet" type="button" @click="listPlatforms(directory.length ? listPage + 1 : 1)">重试</button>
           </div>
-          <p v-else-if="!choices.length" class="muted">未找到匹配的平台。</p>
+          <p v-else-if="!choices.length" class="muted">{{ screen === 'bind' ? '未找到可绑定的平台。' : '未找到匹配的平台。' }}</p>
           <button v-else-if="listPage < listLastPage" type="button" class="quiet" @click="listPlatforms(listPage + 1)">加载更多</button>
         </div>
 
