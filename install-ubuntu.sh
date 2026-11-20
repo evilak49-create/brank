@@ -8,6 +8,7 @@ usage() {
 
 适用于 Ubuntu 24.04 LTS（amd64 / arm64）的新站点。开放 TCP 80 后，
 通过服务器 IP 或域名打开浏览器安装向导，并创建后台账号。
+向导完成后，自动为安装地址申请和续期 Let's Encrypt 证书。公网需开放 TCP 80 和 443。
 脚本从 GitHub 拉取前台 rank-qt 和后台 brank 的默认分支最新提交。
 私有仓库可用 REBATES_FRONTEND_GIT_URL 和 REBATES_BACKEND_GIT_URL 指定 SSH 地址。
 安装中断后可用相同参数重试。完整说明见 deploy/Ubuntu-24.04-安装.md。
@@ -47,12 +48,19 @@ queue=/etc/systemd/system/rebates-install-queue.service
 schedule=/etc/systemd/system/rebates-install-schedule.service
 timer=/etc/systemd/system/rebates-install-schedule.timer
 queue_path=/etc/systemd/system/rebates-install-queue.path
+ssl_service=/etc/systemd/system/rebates-install-ssl.service
+ssl_timer=/etc/systemd/system/rebates-install-ssl.timer
+ssl_path=/etc/systemd/system/rebates-install-ssl.path
+ssl_helper=/usr/local/libexec/rebates-install-ssl
+nginx_parts=/etc/nginx/rebates-install
+acme_root=/var/www/rebates-acme
 
 exec 9>/run/lock/rebates-install.lock
 flock -n 9 || die '已有一个安装进程在运行。'
 
 if [[ ! -f $state/browser-install ]]; then
-    for path in "$app" "$nginx_site" "$nginx_link" "$pool" "$queue" "$queue_path" "$schedule" "$timer"; do
+    for path in "$app" "$nginx_site" "$nginx_link" "$pool" "$queue" "$queue_path" "$schedule" "$timer" \
+        "$ssl_service" "$ssl_timer" "$ssl_path" "$ssl_helper" "$nginx_parts" "$acme_root"; do
         [[ ! -e $path && ! -L $path ]] || die "目标已存在：$path"
     done
     if id "$runtime" >/dev/null 2>&1; then die "系统账号已存在：$runtime"; fi
@@ -106,7 +114,7 @@ if [[ ! -d $app/backend || ! -d $app/frontend ]]; then
 fi
 
 step '安装 Nginx、MySQL、PHP 8.3 和 Composer'
-apt-get install -y nginx mysql-server composer rsync curl ca-certificates openssl unzip xz-utils \
+apt-get install -y nginx mysql-server composer rsync curl ca-certificates openssl unzip xz-utils python3-venv \
     php8.3-cli php8.3-fpm php8.3-mysql php8.3-mbstring php8.3-xml php8.3-curl \
     php8.3-intl php8.3-zip php8.3-gd php8.3-bcmath
 if ! id "$runtime" >/dev/null 2>&1; then
@@ -259,11 +267,8 @@ $app->booted(static function (): void {
 $app->handleRequest(Request::capture());
 PHP
 
-cat >"$nginx_site.new" <<EOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
+install -d -m 0755 "$nginx_parts" "$acme_root"
+cat >"$nginx_parts/app.conf" <<EOF
     root $app/frontend;
     client_max_body_size 24m;
 
@@ -288,7 +293,20 @@ server {
         try_files \$uri =404;
     }
     location / { rewrite ^ /index.php last; }
+EOF
+cat >"$nginx_site.new" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    include $nginx_parts/http-*.conf;
+    location ^~ /.well-known/acme-challenge/ {
+        root $acme_root;
+        try_files \$uri =404;
+    }
+    include $nginx_parts/app.conf;
 }
+include $nginx_parts/https-*.conf;
 EOF
 # Ubuntu's stock default occupies port 80. Leave custom defaults in place.
 nginx_default=/etc/nginx/sites-enabled/default
@@ -315,6 +333,165 @@ if ! nginx -t; then
 fi
 rm -f -- "$nginx_site.previous"
 systemctl reload nginx
+
+step '配置自动 HTTPS'
+install -d -m 0755 /usr/local/libexec
+cat >"$ssl_helper" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+config=/var/www/rebates/backend/storage/app/private/site.env
+parts=/etc/nginx/rebates-install
+webroot=/var/www/rebates-acme
+venv=/var/lib/rebates-install/certbot
+cert=/etc/letsencrypt/live/rebates-install
+if [[ ! -s $config ]]; then exit 0; fi
+
+identifier=$(runuser -u rebates-app -- /usr/bin/python3 - "$config" <<'PY'
+import ipaddress
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+env = Path(sys.argv[1]).read_text()
+match = re.search(r'^APP_URL="([^"]+)"$', env, re.M)
+if not match:
+    sys.exit(0)
+try:
+    url = urlsplit(match[1])
+    host = url.hostname
+    if url.scheme not in ("http", "https") or not host or url.username or url.password:
+        sys.exit(0)
+    if url.port not in (None, 80, 443) or url.path not in ("", "/") or url.query or url.fragment:
+        sys.exit(0)
+except ValueError:
+    sys.exit(0)
+try:
+    ip = ipaddress.ip_address(host)
+except ValueError:
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(host) <= 253 and re.fullmatch(rf"(?:{label}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?", host):
+        print("domain", host, host)
+else:
+    if ip.is_global and not ip.is_multicast and "%" not in host:
+        print("ip", ip, str(ip) if ip.version == 4 else f"[{ip}]")
+PY
+)
+if [[ -z $identifier ]]; then exit 0; fi
+read -r kind host authority <<<"$identifier"
+
+if [[ $kind == ip ]]; then
+    names=(--preferred-profile shortlived --ip-address "$host")
+    verify=(-verify_ip "$host")
+    default_tls=' default_server'
+    renew_before=$(( 3 * 86400 ))
+else
+    names=(-d "$host")
+    verify=(-verify_hostname "$host")
+    default_tls=
+    renew_before=$(( 30 * 86400 ))
+fi
+
+issued=false
+if [[ ! -s $cert/fullchain.pem || ! -s $cert/privkey.pem ]] ||
+    ! openssl verify -partial_chain -trusted "$cert/fullchain.pem" "${verify[@]}" "$cert/fullchain.pem" >/dev/null 2>&1 ||
+    ! openssl x509 -in "$cert/fullchain.pem" -noout -checkend "$renew_before" >/dev/null; then
+    if [[ ! -x $venv/bin/certbot ]]; then
+        /usr/bin/python3 -m venv "$venv"
+        "$venv/bin/python" -m pip --disable-pip-version-check install 'certbot>=5.4,<6'
+    fi
+    "$venv/bin/certbot" certonly --non-interactive --agree-tos --register-unsafely-without-email \
+        --webroot -w "$webroot" --cert-name rebates-install --keep-until-expiring "${names[@]}"
+    issued=true
+fi
+
+if [[ ! -f $parts/https-site.conf ]]; then
+    cat >"$parts/https-site.new" <<EOF
+server {
+    listen 443 ssl$default_tls;
+    listen [::]:443 ssl$default_tls;
+    server_name $authority;
+    ssl_certificate $cert/fullchain.pem;
+    ssl_certificate_key $cert/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    include $parts/app.conf;
+}
+EOF
+    cat >"$parts/http-redirect.new" <<EOF
+    if (\$uri !~ "^/\\.well-known/acme-challenge/") {
+        return 301 https://$authority\$request_uri;
+    }
+EOF
+    mv -- "$parts/https-site.new" "$parts/https-site.conf"
+    mv -- "$parts/http-redirect.new" "$parts/http-redirect.conf"
+    if ! nginx -t || ! systemctl reload nginx; then
+        rm -f -- "$parts/https-site.conf" "$parts/http-redirect.conf"
+        exit 1
+    fi
+elif [[ $issued == true ]]; then
+    nginx -t
+    systemctl reload nginx
+fi
+
+# Keep Laravel-generated URLs and session cookie settings aligned with TLS.
+# Write as the application account so no site-owned path is written as root.
+if [[ ! -f $parts/ssl-ready ]]; then
+    runuser -u rebates-app -- /usr/bin/python3 - "$config" "$authority" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+contents = path.read_text()
+contents = re.sub(r'^APP_URL="[^"]+"$', f'APP_URL="https://{sys.argv[2]}"', contents, flags=re.M)
+contents = re.sub(r'^SESSION_SECURE_COOKIE="[^"]+"$', 'SESSION_SECURE_COOKIE="true"', contents, flags=re.M)
+with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temp:
+    temp.write(contents)
+os.replace(temp.name, path)
+PY
+    systemctl restart rebates-install-queue.service
+    touch "$parts/ssl-ready"
+fi
+BASH
+chmod 0755 "$ssl_helper"
+cat >"$ssl_service" <<EOF
+[Unit]
+Description=Issue and renew the Rebates HTTPS certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+ConditionPathExists=$site_env
+
+[Service]
+Type=oneshot
+ExecStart=$ssl_helper
+TimeoutStartSec=10min
+EOF
+cat >"$ssl_path" <<EOF
+[Unit]
+Description=Check HTTPS after browser installation
+
+[Path]
+PathChanged=$site_env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >"$ssl_timer" <<'EOF'
+[Unit]
+Description=Check the Rebates HTTPS certificate
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*-*-* *:00,15,30,45:00
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
 
 step '配置队列和定时任务'
 cat >"$queue" <<EOF
@@ -368,14 +545,16 @@ AccuracySec=1s
 WantedBy=timers.target
 EOF
 systemctl daemon-reload
-systemctl enable --now rebates-install-queue.path rebates-install-schedule.timer
+systemctl enable --now rebates-install-queue.path rebates-install-schedule.timer \
+    rebates-install-ssl.path rebates-install-ssl.timer
 systemctl is-active --quiet rebates-install-queue.path
 systemctl is-active --quiet rebates-install-schedule.timer
 
 step '验证本机 HTTP 入口'
 if [[ -f $site_env ]]; then
     curl -fsS --noproxy '*' --max-time 20 http://127.0.0.1/ >/dev/null
-    printf '\n站点已安装。后台入口：http://服务器IP或域名/admin/login\n'
+    systemctl start --no-block rebates-install-ssl.service
+    printf '\n站点已安装。后台入口：/admin/login。自动 HTTPS 会在后台检查。\n'
 else
     wizard=$(curl -fsS --noproxy '*' --max-time 20 http://127.0.0.1/install)
     [[ $wizard == *'http://127.0.0.1'* && $wizard != *'http://rebates-install.invalid'* ]] ||
@@ -384,4 +563,5 @@ else
     printf '网站地址和 MySQL 连接信息会自动填入。\n'
     printf '本次安装的数据库密码：%s\n' "$db_password"
     printf '请在安装页填写数据库密码并创建后台账号。安装完成后从 /admin/login 登录。\n'
+    printf '公开域名或公网 IP 的 HTTPS 会在安装向导完成后自动签发，请开放 TCP 80 和 443。\n'
 fi
