@@ -9,11 +9,11 @@ use App\Platforms\PlatformAdministration;
 use App\Platforms\PlatformNetwork;
 use App\Platforms\PlatformQueryFailure;
 use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Group;
@@ -82,58 +82,63 @@ class PlatformResource extends Resource
                     default => $query,
                 }),
         ])->recordActions([
-            PlatformReviewBatchResource::generateAction(),
-            Action::make('reviews')->label('查看评价')->visible(fn (): bool => PlatformReviewResource::canViewAny())
-                ->url(fn (Platform $record): string => PlatformReviewResource::getUrl('index', [
-                    'filters' => ['platform' => ['value' => $record->id]],
-                ])),
-            Action::make('edit_profile')->label('编辑资料')
-                ->authorize(fn (): bool => self::hasPermission('platforms.edit'))
-                ->schema(self::profileFields())
-                ->fillForm(fn (Platform $record): array => $record->only([
-                    'name', 'promotion_url', 'logo_url', 'description', 'rating', 'featured_position',
-                ]))
-                ->action(fn (Action $action, Platform $record, array $data) => ActionForm::submit($action, fn () => app(PlatformAdministration::class)->update(
-                    $record, PublicImageField::retain($data, 'logo_url', $record->logo_url), self::operator(),
-                ))),
-            self::configureQueryAction(),
-            self::testQueryAction(),
-            self::statusAction(true),
-            self::statusAction(false),
+            ActionGroup::make([
+                PlatformReviewBatchResource::generateAction(),
+                Action::make('reviews')->label('查看评价')->visible(fn (): bool => PlatformReviewResource::canViewAny())
+                    ->url(fn (Platform $record): string => PlatformReviewResource::getUrl('index', [
+                        'filters' => ['platform' => ['value' => $record->id]],
+                    ])),
+                Action::make('edit_profile')->label('编辑资料')
+                    ->authorize(fn (): bool => self::hasPermission('platforms.edit'))
+                    ->schema(self::profileFields())
+                    ->fillForm(fn (Platform $record): array => $record->only([
+                        'name', 'promotion_url', 'logo_url', 'description', 'rating', 'featured_position',
+                    ]))
+                    ->action(fn (Action $action, Platform $record, array $data) => ActionForm::submit($action, fn () => app(PlatformAdministration::class)->update(
+                        $record, PublicImageField::retain($data, 'logo_url', $record->logo_url), self::operator(),
+                    ))),
+                self::configureQueryAction(),
+                self::testQueryAction(),
+                self::statusAction(true),
+                self::statusAction(false),
+            ])->label('操作')->button()->color('gray'),
         ]);
     }
 
     public static function createPlatformAction(): Action
     {
         return Action::make('create_platform')->label('新增平台')
-            ->authorize(fn (): bool => self::hasPermission('platforms.edit'))
+            ->authorize(fn (): bool => self::hasPermission('platforms.edit') && self::hasPermission('platforms.configure-query'))
+            ->fillForm(fn (): array => ['network' => PlatformNetwork::Panda->value]
+                + PlatformNetwork::Panda->queryDriver()->formState(null))
             ->steps([
                 Step::make('选择包网')->schema([
                     Select::make('network')->label('包网')->options(PlatformNetwork::options())
                         ->default(PlatformNetwork::Panda->value)->required()->live()
-                        ->afterStateUpdated(fn (Set $set) => $set('configure_query_now', false)),
-                ]),
-                Step::make('平台资料')->schema(self::profileFields()),
-                Step::make('接口设置')->visible(fn (): bool => self::hasPermission('platforms.configure-query'))->schema([
-                    Toggle::make('configure_query_now')->label('同时保存接口草稿')->default(false)->live()
-                        ->afterStateUpdated(function (Get $get, Set $set, bool $state): void {
-                            $network = PlatformNetwork::tryFrom((string) $get('network'));
-                            if (! $state || $network === null || ! self::hasPermission('platforms.configure-query')) {
-                                return;
-                            }
-                            foreach ($network->queryDriver()->formState(null) as $field => $value) {
+                        ->afterStateUpdated(function (Set $set, mixed $state, mixed $old): void {
+                            abort_unless(self::hasPermission('platforms.configure-query'), 403);
+                            $selected = is_string($state) ? PlatformNetwork::tryFrom($state) : null;
+                            $previous = is_string($old) ? PlatformNetwork::tryFrom($old) : null;
+                            $defaults = $selected?->queryDriver()->formState(null) ?? [];
+                            $previousFields = array_keys($previous?->queryDriver()->formState(null) ?? []);
+                            foreach ($defaults + array_fill_keys($previousFields, null) as $field => $value) {
                                 $set($field, $value);
                             }
                         }),
-                    Group::make()->visible(fn (Get $get): bool => (bool) $get('configure_query_now'))
-                        ->schema(fn (Get $get): array => self::queryFields(PlatformNetwork::tryFrom((string) $get('network')))),
+                ]),
+                Step::make('平台资料')->schema(self::profileFields()),
+                Step::make('接口设置')->schema([
+                    Group::make()->schema(function (Get $get): array {
+                        $network = $get('network');
+
+                        return self::queryFields(is_string($network) ? PlatformNetwork::tryFrom($network) : null);
+                    }),
                 ]),
             ])
             ->action(function (Action $action, #[SensitiveParameter] array $data): void {
                 $profile = Arr::only($data, ['network', 'name', 'promotion_url', 'image_upload', 'description', 'rating', 'featured_position']);
-                $query = ($data['configure_query_now'] ?? false) ? $data : null;
                 ActionForm::submit($action, fn () => app(PlatformAdministration::class)->create(
-                    PublicImageField::retain($profile, 'logo_url', null), self::operator(), $query,
+                    PublicImageField::retain($profile, 'logo_url', null), self::operator(), $data,
                 ));
             });
     }
@@ -161,6 +166,14 @@ class PlatformResource extends Resource
     {
         return match ($network) {
             null => [],
+            PlatformNetwork::Wg => [
+                TextInput::make('endpoint')->label('WG API 域名或接口地址')->url()->maxLength(2048)->required()
+                    ->helperText('请使用 WG 提供的 API 域名。该域名需加入服务器的 WG API 允许列表。'),
+                TextInput::make('site_code')->label('品牌 ID（siteCode）')->maxLength(64)->required(),
+                TextInput::make('api_key')->label('API Key')->autocomplete('off')->maxLength(255)->required(),
+                TextInput::make('secret_key')->label('Secret Key')->autocomplete('off')->required(),
+                TextInput::make('test_phone')->label('已知推广测试账号的手机号')->inputMode('tel')->required(),
+            ],
             PlatformNetwork::Panda => [
                 TextInput::make('endpoint')->label('查询接口地址')->url()->maxLength(2048)->required()
                     ->helperText('可粘贴包含查询参数的完整地址。自定义域名须加入服务器允许列表。'),

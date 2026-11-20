@@ -157,7 +157,8 @@ onMounted(load)
       <section class="surface stack">
         <div class="member-actions">
           <div><h2>可用余额</h2><strong>{{ formatBrl(member?.available_balance_cents) }}</strong></div>
-          <button class="quiet" type="button" @click="go('/cash-wallet')">提现与记录 →</button>
+          <button class="quiet" type="button" @click="go('/cash-wallet')">余额提现</button>
+          <button class="quiet" type="button" @click="go('/withdrawal-history')">提现记录</button>
         </div>
       </section>
       <section class="surface member-hero stack">

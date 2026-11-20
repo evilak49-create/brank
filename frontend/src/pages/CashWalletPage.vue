@@ -99,7 +99,10 @@ onMounted(() => load())
     </section>
 
     <section v-if="history" class="surface stack">
-      <h2>余额提现记录</h2>
+      <div class="member-actions">
+        <h2>余额提现记录</h2>
+        <button class="quiet" type="button" @click="go('/withdrawal-history')">全部提现记录</button>
+      </div>
       <p v-if="!history.data.length" class="muted">暂无余额提现记录。</p>
       <article v-for="order in history.data" :key="order.id" class="stack">
         <strong>{{ formatBrl(order.amount_cents) }} · {{ statuses[order.status] || order.status }}</strong>

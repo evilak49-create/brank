@@ -11,6 +11,7 @@ import AuthPages from './pages/AuthPages.vue'
 import ContentPages from './pages/ContentPages.vue'
 import PointQuotePage from './pages/PointQuotePage.vue'
 import CashWalletPage from './pages/CashWalletPage.vue'
+import WithdrawalHistoryPage from './pages/WithdrawalHistoryPage.vue'
 import PlatformPages from './pages/PlatformPages.vue'
 import ShopPages from './pages/ShopPages.vue'
 import MemberPages from './pages/MemberPages.vue'
@@ -45,6 +46,7 @@ const pages = [
   [/^\/member$/, '个人中心', MemberPages, true],
   [/^\/wallet$/, '积分钱包', MemberPages, true],
   [/^\/cash-wallet$/, '可用余额', CashWalletPage, true],
+  [/^\/withdrawal-history$/, '提现记录', WithdrawalHistoryPage, true],
   [/^\/wallet\/\d+$/, '积分明细', MemberPages, true],
   [/^\/address$/, '收货地址', MemberPages, true],
   [/^\/pix$/, 'Pix 收款账户', MemberPages, true],

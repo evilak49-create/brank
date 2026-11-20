@@ -268,7 +268,10 @@ onMounted(load)
       </section>
 
       <section v-if="records" class="surface stack">
-        <h2>提现记录</h2>
+        <div class="member-actions">
+          <h2>红包提现记录</h2>
+          <button class="quiet" type="button" @click="go('/withdrawal-history')">全部提现记录</button>
+        </div>
         <ul v-if="records.data.length" class="row-list">
           <li v-for="record in records.data" :key="record.id">
             <button @click="go(home + '/withdrawals/' + record.id)">
