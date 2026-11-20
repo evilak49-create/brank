@@ -4,7 +4,11 @@ umask 022
 
 usage() {
     cat <<'EOF'
-用法：sudo bash install-ubuntu.sh
+用法：sudo bash install-ubuntu.sh [--update | --status | --logs]
+  无参数     安装环境或重新应用部署配置
+  --update   拉取两个仓库的最新代码，备份数据库并升级
+  --status   查看运行状态和当前代码版本
+  --logs     查看最近的队列、调度和 HTTPS 日志
 
 适用于 Ubuntu 24.04 LTS（amd64 / arm64）的新站点。开放 TCP 80 后，
 通过服务器 IP 或域名打开浏览器安装向导，并创建后台账号。
@@ -22,7 +26,12 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     usage
     exit 0
 fi
-if (( $# != 0 )); then usage >&2; exit 2; fi
+action=${1:-install}
+if (( $# > 1 )); then usage >&2; exit 2; fi
+case "$action" in
+    install|--update|--status|--logs) ;;
+    *) usage >&2; exit 2 ;;
+esac
 (( EUID == 0 )) || die '请使用 sudo bash 运行。'
 
 . /etc/os-release
@@ -54,11 +63,46 @@ ssl_path=/etc/systemd/system/rebates-install-ssl.path
 ssl_helper=/usr/local/libexec/rebates-install-ssl
 nginx_parts=/etc/nginx/rebates-install
 acme_root=/var/www/rebates-acme
+deploy_command=/usr/local/sbin/rebates-deploy
+backend=$app/backend
+site_env=$backend/storage/app/private/site.env
+update_marker=$state/update-in-progress
+
+active_revisions() {
+    if [[ -f $app/current/revisions ]]; then
+        cat "$app/current/revisions"
+    elif [[ -d $state/backend-source/.git && -d $state/frontend-source/.git ]]; then
+        printf 'backend %s\nfrontend %s\n' \
+            "$(git -C "$state/backend-source" rev-parse HEAD)" \
+            "$(git -C "$state/frontend-source" rev-parse HEAD)"
+    fi
+}
+
+if [[ $action == --status || $action == --logs ]]; then
+    [[ -f $state/browser-install ]] || die '未找到部署记录。'
+    if [[ $action == --logs ]]; then
+        journalctl --no-pager -n 100 -u nginx -u php8.3-fpm -u mysql \
+            -u rebates-install-queue.service -u rebates-install-schedule.service -u rebates-install-ssl.service
+        if [[ -f $backend/storage/logs/laravel.log ]]; then
+            printf '\nLaravel\n'
+            tail -n 60 "$backend/storage/logs/laravel.log"
+        fi
+        exit 0
+    fi
+    active_revisions
+    if [[ -f $update_marker ]]; then printf '有一次升级尚未结束。\n'; fi
+    for unit in nginx php8.3-fpm mysql rebates-install-queue.service \
+        rebates-install-schedule.timer rebates-install-ssl.timer; do
+        printf '%-34s %s\n' "$unit" "$(systemctl is-active "$unit" || true)"
+    done
+    exit 0
+fi
 
 exec 9>/run/lock/rebates-install.lock
 flock -n 9 || die '已有一个安装进程在运行。'
 
 if [[ ! -f $state/browser-install ]]; then
+    [[ $action != --update ]] || die '请先完成首次安装。'
     for path in "$app" "$nginx_site" "$nginx_link" "$pool" "$queue" "$queue_path" "$schedule" "$timer" \
         "$ssl_service" "$ssl_timer" "$ssl_path" "$ssl_helper" "$nginx_parts" "$acme_root"; do
         [[ ! -e $path && ! -L $path ]] || die "目标已存在：$path"
@@ -70,9 +114,14 @@ fi
 
 build_dir=
 source_tmp=
+update_sources=
 cleanup() {
     if [[ -n $build_dir ]]; then rm -rf -- "$build_dir"; fi
     if [[ -n $source_tmp ]]; then rm -rf -- "$source_tmp"; fi
+    if [[ -n $update_sources ]]; then rm -rf -- "$update_sources"; fi
+    if [[ $action == --update && -f $update_marker ]]; then
+        printf '升级尚未结束。请查看上方错误，数据库备份在 %s/backups。修复后可重试 --update。\n' "$state" >&2
+    fi
 }
 trap cleanup EXIT
 trap 'printf "安装中断（脚本第 %s 行）。解决上方报错后可用原命令重试。\n" "$LINENO" >&2' ERR
@@ -103,9 +152,179 @@ checkout_source() {
     step "${label}源码提交 $(git -C "$source_dir" rev-parse --short HEAD)"
 }
 
+mysql_root() { mysql --no-defaults --protocol=socket -uroot --batch --skip-column-names "$@"; }
+
+prepare_build() {
+    step '安装 Laravel 生产依赖并构建 Vue 前台'
+    # Stay on the deployment filesystem so publishing each build is a rename.
+    build_dir=$(mktemp -d "$app/.build.XXXXXXXX")
+    chown "$runtime:$runtime" "$build_dir"
+    chmod 0700 "$build_dir"
+}
+
+build_backend() {
+    mkdir "$build_dir/backend"
+    rsync -r --exclude='/.env*' --exclude='/vendor' --exclude='/node_modules' \
+        --exclude='/storage/***' --exclude='/bootstrap/cache/***' \
+        --exclude='/public/hot' --exclude='/public/storage' \
+        --exclude='/.git' --exclude='/database/*.sqlite*' "$backend_source/" "$build_dir/backend/"
+    install -d "$build_dir/backend"/{bootstrap/cache,storage/app/private,storage/app/public,storage/logs}
+    install -d "$build_dir/backend"/storage/framework/{cache/data,sessions,views}
+    chown -R "$runtime:$runtime" "$build_dir/backend"
+    (
+        cd "$build_dir/backend"
+        runuser -u "$runtime" -- env HOME="$build_dir" COMPOSER_HOME="$build_dir/composer" \
+            "$php" /usr/bin/composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
+        runuser -u "$runtime" -- "$php" artisan filament:assets --no-interaction
+    )
+    chown -hR root:root "$build_dir/backend"
+    chown -hR "$runtime:$runtime" "$build_dir/backend/storage" "$build_dir/backend/bootstrap/cache"
+    chmod 0700 "$build_dir/backend/storage/app/private"
+    mkdir -p "$build_dir/backend/public/"{css,js,fonts}
+    chown -hR "$runtime:$runtime" "$build_dir/backend/public/"{css,js,fonts}
+}
+
+build_frontend() {
+    node_url=https://nodejs.org/dist/latest-v24.x
+    (
+        cd "$build_dir"
+        curl -fsSL --retry 3 "$node_url/SHASUMS256.txt" -o SHASUMS256.txt
+        awk -v arch="$node_arch" '$2 ~ ("^node-v24\\.[0-9]+\\.[0-9]+-linux-" arch "\\.tar\\.xz$")' \
+            SHASUMS256.txt > node.sha256
+        [[ $(wc -l <node.sha256) == 1 ]]
+        read -r _ archive <node.sha256
+        version=${archive#node-}
+        version=${version%-linux-*}
+        curl -fsSL --retry 3 "https://nodejs.org/dist/$version/$archive" -o "$archive"
+        sha256sum --check node.sha256
+        mkdir node frontend
+        tar -xJf "$archive" --no-same-owner --strip-components=1 -C node
+        rsync -r --exclude='/.env*' --exclude='/.git' --exclude='/node_modules' --exclude='/dist' \
+            "$frontend_source/" frontend/
+        chown -R "$runtime:$runtime" frontend
+        cd frontend
+        runuser -u "$runtime" -- env HOME="$build_dir" PATH="$build_dir/node/bin:/usr/bin:/bin" npm ci --no-audit --no-fund
+        runuser -u "$runtime" -- env HOME="$build_dir" PATH="$build_dir/node/bin:/usr/bin:/bin" npm run build
+    )
+    test -s "$build_dir/frontend/dist/index.html"
+    chown -hR root:root "$build_dir/frontend/dist"
+}
+
+save_deploy_command() {
+    local script=${BASH_SOURCE[0]}
+    if [[ -f $script && ! $script -ef $deploy_command ]]; then
+        install -m 0755 "$script" "$deploy_command.new"
+        mv -f -- "$deploy_command.new" "$deploy_command"
+    fi
+}
+
+initialize_release_layout() {
+    local original=$app/releases/initial
+    install -d -m 0755 "$original" "$app/shared"
+    if [[ ! -L $app/current ]]; then
+        if [[ -d $backend && ! -L $backend ]]; then mv -- "$backend" "$original/backend"; fi
+        if [[ -d $app/frontend && ! -L $app/frontend ]]; then mv -- "$app/frontend" "$original/frontend"; fi
+        if [[ -d $original/backend/storage && ! -L $original/backend/storage ]]; then
+            mv -- "$original/backend/storage" "$app/shared/storage"
+        fi
+        if [[ ! -L $original/backend/storage ]]; then
+            ln -s "$app/shared/storage" "$original/backend/storage"
+        fi
+        ln -s releases/initial "$app/current"
+    fi
+    if [[ ! -L $backend ]]; then ln -s current/backend "$backend"; fi
+    if [[ ! -L $app/frontend ]]; then ln -s current/frontend "$app/frontend"; fi
+}
+
+upgrade_artisan() (
+    local directory=$1
+    shift
+    cd "$directory"
+    runuser -u "$runtime" -- "$php" artisan "$@"
+)
+
+upgrade_site() {
+    if [[ -d $app/releases/initial ]]; then initialize_release_layout; fi
+    [[ -s $site_env && -f $backend/public/rebates-install.php && -s $app/frontend/index.html ]] ||
+        die '请先通过浏览器完成安装。'
+    update_sources=$(mktemp -d "$state/.update.XXXXXXXX")
+    checkout_source 后台 "$backend_git_url" "$update_sources/backend" backend composer.json composer.lock
+    checkout_source 前台 "$frontend_git_url" "$update_sources/frontend" frontend package.json package-lock.json
+    backend_source=$(project_path "$update_sources/backend" backend composer.json composer.lock)
+    frontend_source=$(project_path "$update_sources/frontend" frontend package.json package-lock.json)
+    local revisions
+    revisions=$(printf 'backend %s\nfrontend %s\n' \
+        "$(git -C "$update_sources/backend" rev-parse HEAD)" \
+        "$(git -C "$update_sources/frontend" rev-parse HEAD)")
+    if [[ ! -f $update_marker && $revisions == "$(active_revisions)" ]]; then
+        printf '当前前后台已是最新版本。\n'
+        return
+    fi
+
+    prepare_build
+    build_backend
+    build_frontend
+    install -m 0644 "$backend/public/rebates-install.php" "$build_dir/backend/public/rebates-install.php"
+    install -d -m 0755 "$app/releases"
+    local release backup
+    release=$(mktemp -d "$app/releases/$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
+    chmod 0755 "$release"
+    mv -- "$build_dir/backend" "$release/backend"
+    mv -- "$build_dir/frontend/dist" "$release/frontend"
+    printf '%s\n' "$revisions" >"$release/revisions"
+    chmod 0750 "$release/backend/bootstrap/cache"
+
+    step '暂停业务进程并备份数据库'
+    touch "$update_marker"
+    upgrade_artisan "$backend" down --retry=60 --no-interaction
+    systemctl stop rebates-install-queue.path rebates-install-schedule.timer
+    systemctl stop rebates-install-queue.service rebates-install-schedule.service
+    install -d -m 0700 "$state/backups"
+    backup="$state/backups/${release##*/}.sql.gz"
+    (
+        umask 077
+        mysqldump --no-defaults --protocol=socket -uroot --single-transaction --quick \
+            --no-tablespaces --set-gtid-purged=OFF --databases rebates_app | gzip >"$backup.partial"
+        mv -- "$backup.partial" "$backup"
+    )
+    printf '数据库备份：%s\n' "$backup"
+
+    step '执行数据库迁移并切换前后台'
+    initialize_release_layout
+    mv -- "$release/backend/storage" "$build_dir/unused-storage"
+    ln -s "$app/shared/storage" "$release/backend/storage"
+    upgrade_artisan "$release/backend" migrate --force --no-interaction
+    upgrade_artisan "$release/backend" view:clear --no-interaction
+    ln -sfn -- "releases/${release##*/}" "$app/current.new"
+    mv -Tf -- "$app/current.new" "$app/current"
+    systemctl reload php8.3-fpm
+    upgrade_artisan "$backend" up --no-interaction
+
+    local health
+    local -a probe=(-fsSL --max-time 20 --noproxy '*' --proto-redir '=https' --connect-to '::127.0.0.1:')
+    if ! health=$(curl "${probe[@]}" http://127.0.0.1/api/v1/health) ||
+        [[ $health != '{"status":"ok"}' ]] ||
+        ! curl "${probe[@]}" http://127.0.0.1/api/v1/content/banners >/dev/null ||
+        ! curl "${probe[@]}" http://127.0.0.1/ | cmp -s - "$app/frontend/index.html"; then
+        upgrade_artisan "$backend" down --retry=60 --no-interaction
+        die '新版本的前台或 API 检查失败。'
+    fi
+    systemctl start rebates-install-queue.path rebates-install-schedule.timer
+    systemctl start rebates-install-queue.service
+    rm -- "$update_marker"
+    printf '\n升级完成。当前版本\n%s\n' "$revisions"
+}
+
+if [[ $action == --update ]]; then
+    upgrade_site
+    save_deploy_command
+    exit 0
+fi
+
+[[ ! -f $update_marker ]] || die '有一次升级尚未结束，请使用 --update 继续。'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-if [[ ! -d $app/backend || ! -d $app/frontend ]]; then
+if [[ ! -d $backend || ! -d $app/frontend ]]; then
     apt-get install -y git ca-certificates openssh-client
     checkout_source 后台 "$backend_git_url" "$state/backend-source" backend composer.json composer.lock
     checkout_source 前台 "$frontend_git_url" "$state/frontend-source" frontend package.json package-lock.json
@@ -123,68 +342,19 @@ fi
 install -d -m 0755 "$app"
 systemctl enable --now mysql nginx php8.3-fpm
 
-mysql_root() { mysql --no-defaults --protocol=socket -uroot --batch --skip-column-names "$@"; }
-
-if [[ ! -d $app/backend || ! -d $app/frontend ]]; then
-    step '安装 Laravel 生产依赖并构建 Vue 前台'
-    # Stay on the deployment filesystem so publishing each build is a rename.
-    build_dir=$(mktemp -d "$app/.build.XXXXXXXX")
-    chown "$runtime:$runtime" "$build_dir"
-    chmod 0700 "$build_dir"
-    if [[ ! -d $app/backend ]]; then
-        mkdir "$build_dir/backend"
-        rsync -r --exclude='/.env*' --exclude='/vendor' --exclude='/node_modules' \
-            --exclude='/storage/***' --exclude='/bootstrap/cache/***' \
-            --exclude='/public/hot' --exclude='/public/storage' \
-            --exclude='/.git' --exclude='/database/*.sqlite*' "$backend_source/" "$build_dir/backend/"
-        install -d "$build_dir/backend"/{bootstrap/cache,storage/app/private,storage/app/public,storage/logs}
-        install -d "$build_dir/backend"/storage/framework/{cache/data,sessions,views}
-        chown -R "$runtime:$runtime" "$build_dir/backend"
-        (
-            cd "$build_dir/backend"
-            runuser -u "$runtime" -- env HOME="$build_dir" COMPOSER_HOME="$build_dir/composer" \
-                "$php" /usr/bin/composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
-            runuser -u "$runtime" -- "$php" artisan filament:assets --no-interaction
-        )
-        chown -hR root:root "$build_dir/backend"
-        chown -hR "$runtime:$runtime" "$build_dir/backend/storage" "$build_dir/backend/bootstrap/cache"
-        chmod 0700 "$build_dir/backend/storage/app/private"
-        mkdir -p "$build_dir/backend/public/"{css,js,fonts}
-        chown -hR "$runtime:$runtime" "$build_dir/backend/public/"{css,js,fonts}
-        mv -- "$build_dir/backend" "$app/backend"
+if [[ ! -d $backend || ! -d $app/frontend ]]; then
+    prepare_build
+    if [[ ! -d $backend ]]; then
+        build_backend
+        mv -- "$build_dir/backend" "$backend"
     fi
-
     if [[ ! -d $app/frontend ]]; then
-        node_url=https://nodejs.org/dist/latest-v24.x
-        (
-            cd "$build_dir"
-            curl -fsSL --retry 3 "$node_url/SHASUMS256.txt" -o SHASUMS256.txt
-            awk -v arch="$node_arch" '$2 ~ ("^node-v24\\.[0-9]+\\.[0-9]+-linux-" arch "\\.tar\\.xz$")' \
-                SHASUMS256.txt > node.sha256
-            [[ $(wc -l <node.sha256) == 1 ]]
-            read -r _ archive <node.sha256
-            version=${archive#node-}
-            version=${version%-linux-*}
-            curl -fsSL --retry 3 "https://nodejs.org/dist/$version/$archive" -o "$archive"
-            sha256sum --check node.sha256
-            mkdir node frontend
-            tar -xJf "$archive" --no-same-owner --strip-components=1 -C node
-            rsync -r --exclude='/.env*' --exclude='/.git' --exclude='/node_modules' --exclude='/dist' \
-                "$frontend_source/" frontend/
-            chown -R "$runtime:$runtime" frontend
-            cd frontend
-            runuser -u "$runtime" -- env HOME="$build_dir" PATH="$build_dir/node/bin:/usr/bin:/bin" npm ci --no-audit --no-fund
-            runuser -u "$runtime" -- env HOME="$build_dir" PATH="$build_dir/node/bin:/usr/bin:/bin" npm run build
-        )
-        test -s "$build_dir/frontend/dist/index.html"
-        chown -hR root:root "$build_dir/frontend/dist"
+        build_frontend
         mv -- "$build_dir/frontend/dist" "$app/frontend"
     fi
 fi
 
 step '配置本机数据库和浏览器安装授权'
-backend=$app/backend
-site_env=$backend/storage/app/private/site.env
 chmod 0750 "$backend/bootstrap/cache"
 if [[ ! -f $site_env ]]; then
     if [[ ! -f $state/database-password ]]; then
@@ -565,3 +735,4 @@ else
     printf '请在安装页填写数据库密码并创建后台账号。安装完成后从 /admin/login 登录。\n'
     printf '公开域名或公网 IP 的 HTTPS 会在安装向导完成后自动签发，请开放 TCP 80 和 443。\n'
 fi
+save_deploy_command

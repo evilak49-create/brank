@@ -27,3 +27,23 @@ bash -c 'set -e; f=$(mktemp); trap "rm -f -- \"$f\"" EXIT; curl -fsSL https://ra
 sudo systemctl status nginx php8.3-fpm mysql rebates-install-queue.path rebates-install-schedule.timer
 sudo journalctl -u rebates-install-queue.service -u rebates-install-schedule.service -n 50 --no-pager
 ```
+
+## 升级与日常运维
+
+现有站点可以下载最新版脚本并直接升级。私有仓库继续使用首次安装使用的 Git 地址变量和 SSH 密钥。
+
+```bash
+bash -c 'set -e; f=$(mktemp); trap "rm -f -- \"$f\"" EXIT; curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw+json" "https://api.github.com/repos/evilak49-create/brank/contents/install-ubuntu.sh?ref=main" -o "$f"; sudo bash "$f" --update'
+```
+
+首次安装或升级成功后，也可以在服务器上运行：
+
+```bash
+sudo rebates-deploy --update
+sudo rebates-deploy --status
+sudo rebates-deploy --logs
+```
+
+升级先构建两个仓库的最新版，再暂停业务、备份 MySQL、运行迁移、切换版本并检查前台和 API。站点配置、上传和其他持久化文件由各版本共用，现有证书及续期配置继续使用。升级期间前台 API 会暂时进入维护模式。
+
+历史代码版本保存在 `/var/www/rebates/releases/`，数据库备份保存在 `/var/lib/rebates-install/backups/`。迁移或检查失败时，站点会保留维护状态。修正报错后可重新执行升级命令。恢复旧数据库属于单独的运维操作。
