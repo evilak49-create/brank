@@ -28,6 +28,7 @@ const linkVisible = ref(false)
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 const statuses = { pending: '待审核', processing: '处理中', paid: '已到账', rejected: '未通过', failed: '提现失败', unresolved: '结果待确认' }
 const round = computed(() => packets.value?.round)
+const pageCopy = computed(() => packets.value?.page_copy)
 const ready = computed(() => canWithdraw(round.value))
 const inviteLink = computed(() => {
   const relative = packets.value?.invite_url
@@ -91,7 +92,7 @@ async function load() {
   const page = Number(props.route.query.get('page')) || 1
   try {
     if (isHome) {
-      const [activity, history] = await Promise.allSettled([api(home), api('/pix-withdrawals?page=' + page)])
+      const [activity, history] = await Promise.allSettled([api(home, { fresh: true }), api('/pix-withdrawals?page=' + page)])
       if (activity.status === 'fulfilled') {
         packets.value = activity.value.data
         if (round.value) clearAttempt(openKey)
@@ -154,7 +155,7 @@ async function copyInvite() {
 async function shareInvite() {
   if (!inviteLink.value) return
   if (navigator.share) {
-    try { await navigator.share({ title: '现金红包邀请', url: inviteLink.value }); return }
+    try { await navigator.share({ title: pageCopy.value?.opening_title || '现金红包邀请', url: inviteLink.value }); return }
     catch (failure) { if (failure.name === 'AbortError') return }
   }
   linkVisible.value = true
@@ -233,12 +234,13 @@ onMounted(load)
           <circle cx="60" cy="64" r="15" fill="#f9cd7e"/>
           <path d="M60 55v18m-8-9h16" stroke="#a85e42" stroke-width="2.5" stroke-linecap="round"/>
         </svg>
-        <h2>现金红包</h2>
-        <div class="member-actions"><button class="primary" :disabled="working" @click="open">{{ working ? '正在拆开…' : '拆开红包' }}</button></div>
+        <h2>{{ pageCopy?.opening_title || '现金红包' }}</h2>
+        <p v-if="pageCopy?.opening_description" class="reward-opening-description">{{ pageCopy.opening_description }}</p>
+        <div class="member-actions"><button class="primary" :disabled="working" @click="open">{{ working ? '正在拆开…' : (pageCopy?.open_label || '拆开红包') }}</button></div>
       </section>
 
       <section v-else-if="round" class="surface member-hero stack">
-        <h2>本轮红包</h2>
+        <h2>{{ pageCopy?.balance_title || '本轮红包' }}</h2>
         <strong>{{ money(round.balance_cents) }}</strong>
         <progress class="member-progress" :value="round.balance_cents" :max="round.threshold_cents" aria-label="提现进度"></progress>
         <p>提现目标 {{ money(round.threshold_cents) }}</p>
@@ -247,7 +249,7 @@ onMounted(load)
         <p v-else>已达到提现目标</p>
         <div class="member-actions">
           <button class="primary" :disabled="!ready" @click="go(withdraw)">申请提现</button>
-          <button class="quiet" :disabled="!inviteLink" @click="shareInvite">邀请好友</button>
+          <button class="quiet" :disabled="!inviteLink" @click="shareInvite">{{ pageCopy?.invite_label || '邀请好友' }}</button>
           <button class="quiet" :disabled="!inviteLink" @click="copyInvite">复制链接</button>
           <button class="quiet" @click="go(home + '/invites')">邀请明细</button>
         </div>
@@ -258,11 +260,10 @@ onMounted(load)
 
       <p v-if="info" class="surface" role="status">{{ info }}</p>
 
-      <section v-if="packets" class="surface stack">
+      <section v-if="pageCopy?.rules_html" class="surface stack">
         <details>
-          <summary>活动规则</summary>
-          <p>拆开红包后可获得本轮提现目标金额 85% 至 95% 的初始奖励。好友通过邀请链接注册后，每次按剩余差额的 50% 至 70% 发放奖励。差额低于 R$ 0,10 时，下次有效邀请可补齐。</p>
-          <p>邀请链接可跨轮次使用。达到本轮目标后产生的有效邀请，将在下一轮结算。达标后可通过 Pix 提现。</p>
+          <summary>{{ pageCopy.rules_title }}</summary>
+          <div class="reward-rule-copy" v-html="pageCopy.rules_html"></div>
         </details>
       </section>
 
@@ -350,3 +351,12 @@ onMounted(load)
     </div>
   </div>
 </template>
+
+<style scoped>
+.reward-opening-description { text-align: center; white-space: pre-line; overflow-wrap: anywhere; }
+.reward-rule-copy { display: grid; gap: 0.65rem; margin-top: 0.75rem; overflow-wrap: anywhere; }
+.reward-rule-copy :deep(ul) { list-style: disc; padding-inline-start: 1.4rem; }
+.reward-rule-copy :deep(ol) { list-style: decimal; padding-inline-start: 1.4rem; }
+.reward-rule-copy :deep(blockquote) { border-inline-start: 2px solid var(--line); padding-inline-start: 0.75rem; }
+.reward-rule-copy :deep(a) { text-decoration: underline; }
+</style>
