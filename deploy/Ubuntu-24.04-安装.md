@@ -47,3 +47,19 @@ sudo rebates-deploy --logs
 升级先构建两个仓库的最新版，再暂停业务、备份 MySQL、运行迁移、切换版本并检查前台和 API。站点配置、上传和其他持久化文件由各版本共用，现有证书及续期配置继续使用。升级期间前台 API 会暂时进入维护模式。
 
 历史代码版本保存在 `/var/www/rebates/releases/`，数据库备份保存在 `/var/lib/rebates-install/backups/`。迁移或检查失败时，站点会保留维护状态。修正报错后可重新执行升级命令。恢复旧数据库属于单独的运维操作。
+
+## 绑定新的主域名
+
+先将新域名的 A 记录指向服务器公网 IPv4。使用 AAAA 记录时，也要确保该 IPv6 指向服务器且公网可以访问。放行 TCP 80 和 443，等待 DNS 生效。
+
+```bash
+sudo rebates-deploy --bind-domain rebates.example.com
+```
+
+如果服务器上的运维命令版本较旧，可以直接下载最新版并绑定：
+
+```bash
+bash -c 'set -e; f=$(mktemp); trap "rm -f -- \"$f\"" EXIT; curl -fsSL --retry 3 -H "Accept: application/vnd.github.raw+json" "https://api.github.com/repos/evilak49-create/brank/contents/install-ubuntu.sh?ref=main" -o "$f"; sudo bash "$f" --bind-domain "$1"' _ rebates.example.com
+```
+
+成功后，新域名成为站点主地址，HTTP 会跳转到新地址的 HTTPS，证书会自动续期。旧地址上的浏览器登录状态不会转移到新域名，请从新域名的 `/admin/login` 重新登录。证书签发或 HTTPS 检查未通过时，现有主地址继续使用。可用 `sudo rebates-deploy --status` 查看站点地址和证书到期时间。

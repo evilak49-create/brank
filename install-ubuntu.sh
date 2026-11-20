@@ -4,9 +4,10 @@ umask 022
 
 usage() {
     cat <<'EOF'
-用法：sudo bash install-ubuntu.sh [--update | --status | --logs]
+用法：sudo bash install-ubuntu.sh [--update | --bind-domain 域名 | --status | --logs]
   无参数     安装环境或重新应用部署配置
   --update   拉取两个仓库的最新代码，备份数据库并升级
+  --bind-domain 域名   绑定新的主域名并自动启用 HTTPS
   --status   查看运行状态和当前代码版本
   --logs     查看最近的队列、调度和 HTTPS 日志
 
@@ -27,9 +28,20 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then
     exit 0
 fi
 action=${1:-install}
-if (( $# > 1 )); then usage >&2; exit 2; fi
+bind_domain=
 case "$action" in
-    install|--update|--status|--logs) ;;
+    --bind-domain)
+        if (( $# != 2 )); then usage >&2; exit 2; fi
+        bind_domain=${2,,}
+        bind_domain=${bind_domain%.}
+        dns_label='[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'
+        if [[ ${#bind_domain} -gt 253 || ! $bind_domain =~ ^($dns_label\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+            die '请输入域名，如 rebates.example.com，省略协议、端口和路径。'
+        fi
+        ;;
+    install|--update|--status|--logs)
+        if (( $# > 1 )); then usage >&2; exit 2; fi
+        ;;
     *) usage >&2; exit 2 ;;
 esac
 (( EUID == 0 )) || die '请使用 sudo bash 运行。'
@@ -90,6 +102,13 @@ if [[ $action == --status || $action == --logs ]]; then
         exit 0
     fi
     active_revisions
+    if [[ -s $site_env ]]; then
+        runuser -u "$runtime" -- sed -n 's/^APP_URL="\([^"]*\)"$/站点地址：\1/p' "$site_env"
+    fi
+    if [[ -f $nginx_parts/https-site.conf ]]; then
+        cert_file=$(awk '$1 == "ssl_certificate" { sub(/;$/, "", $2); print $2; exit }' "$nginx_parts/https-site.conf")
+        if [[ -s $cert_file ]]; then openssl x509 -in "$cert_file" -noout -enddate; fi
+    fi
     if [[ -f $update_marker ]]; then printf '有一次升级尚未结束。\n'; fi
     for unit in nginx php8.3-fpm mysql rebates-install-queue.service \
         rebates-install-schedule.timer rebates-install-ssl.timer; do
@@ -102,7 +121,7 @@ exec 9>/run/lock/rebates-install.lock
 flock -n 9 || die '已有一个安装进程在运行。'
 
 if [[ ! -f $state/browser-install ]]; then
-    [[ $action != --update ]] || die '请先完成首次安装。'
+    [[ $action == install ]] || die '请先完成首次安装。'
     for path in "$app" "$nginx_site" "$nginx_link" "$pool" "$queue" "$queue_path" "$schedule" "$timer" \
         "$ssl_service" "$ssl_timer" "$ssl_path" "$ssl_helper" "$nginx_parts" "$acme_root"; do
         [[ ! -e $path && ! -L $path ]] || die "目标已存在：$path"
@@ -315,6 +334,306 @@ upgrade_site() {
     printf '\n升级完成。当前版本\n%s\n' "$revisions"
 }
 
+configure_nginx() {
+install -d -m 0755 "$nginx_parts" "$acme_root"
+cat >"$nginx_parts/app.conf" <<EOF
+    root $app/frontend;
+    client_max_body_size 24m;
+
+    location = / { rewrite ^ /rebates-install.php last; }
+    location = /install { rewrite ^ /rebates-install.php last; }
+    location = /index.html { try_files \$uri =404; }
+    location ~ ^/(?:index|rebates-install)\.php\$ {
+        internal;
+        root $backend/public;
+        include fastcgi.conf;
+        fastcgi_pass unix:$socket;
+    }
+    location ~ /\. { return 404; }
+    location ~* \.php(?:/|\$) { return 404; }
+    location /assets/ { try_files \$uri =404; }
+    location ~ ^/(?:css|js|fonts|vendor)/ {
+        root $backend/public;
+        try_files \$uri =404;
+    }
+    location = /robots.txt {
+        root $backend/public;
+        try_files \$uri =404;
+    }
+    location / { rewrite ^ /index.php last; }
+EOF
+cat >"$nginx_site.new" <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    include $nginx_parts/http-*.conf;
+    location ^~ /.well-known/acme-challenge/ {
+        root $acme_root;
+        try_files \$uri =404;
+    }
+    include $nginx_parts/app.conf;
+}
+include $nginx_parts/https-*.conf;
+EOF
+# Ubuntu's stock default occupies port 80. Leave custom defaults in place.
+nginx_default=/etc/nginx/sites-enabled/default
+stock_default=
+if [[ -L $nginx_default && $(readlink -f "$nginx_default") == /etc/nginx/sites-available/default ]]; then
+    expected=$(dpkg-query -W -f='${Conffiles}' nginx-common | awk '$1=="/etc/nginx/sites-available/default" { print $2 }')
+    actual=$(md5sum /etc/nginx/sites-available/default | cut -d' ' -f1)
+    if [[ $actual == "$expected" ]]; then
+        stock_default=$(readlink "$nginx_default")
+        rm -- "$nginx_default"
+    fi
+fi
+if [[ -f $nginx_site ]]; then cp -- "$nginx_site" "$nginx_site.previous"; fi
+mv -- "$nginx_site.new" "$nginx_site"
+ln -sfn -- "$nginx_site" "$nginx_link"
+if ! nginx -t; then
+    if [[ -f $nginx_site.previous ]]; then
+        mv -- "$nginx_site.previous" "$nginx_site"
+    else
+        rm -f -- "$nginx_link" "$nginx_site"
+    fi
+    if [[ -n $stock_default ]]; then ln -s -- "$stock_default" "$nginx_default"; fi
+    die 'Nginx 配置校验失败，请检查 TCP 80 的默认站点配置。'
+fi
+rm -f -- "$nginx_site.previous"
+systemctl reload nginx
+}
+
+configure_ssl() {
+step '配置自动 HTTPS'
+install -d -m 0755 /usr/local/libexec
+cat >"$ssl_helper.new" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+config=/var/www/rebates/backend/storage/app/private/site.env
+parts=/etc/nginx/rebates-install
+webroot=/var/www/rebates-acme
+venv=/var/lib/rebates-install/certbot
+if [[ ! -s $config ]]; then exit 0; fi
+if [[ -f /var/lib/rebates-install/update-in-progress ]]; then exit 0; fi
+requested=${1:-}
+exec 8>/run/lock/rebates-install-ssl.lock
+if [[ -n $requested ]]; then
+    flock -w 600 8
+else
+    flock -n 8 || exit 0
+fi
+
+identifier=$(runuser -u rebates-app -- /usr/bin/python3 - "$config" "$requested" <<'PY'
+import ipaddress
+import re
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit
+
+env = Path(sys.argv[1]).read_text()
+match = re.search(r'^APP_URL="([^"]+)"$', env, re.M)
+if not match:
+    sys.exit(0)
+try:
+    url = urlsplit(f"https://{sys.argv[2]}" if sys.argv[2] else match[1])
+    host = url.hostname
+    if url.scheme not in ("http", "https") or not host or url.username or url.password:
+        sys.exit(0)
+    if url.port not in (None, 80, 443) or url.path not in ("", "/") or url.query or url.fragment:
+        sys.exit(0)
+except ValueError:
+    sys.exit(0)
+try:
+    ip = ipaddress.ip_address(host)
+except ValueError:
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(host) <= 253 and re.fullmatch(rf"(?:{label}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?", host):
+        print("domain", host, host)
+else:
+    if ip.is_global and not ip.is_multicast and "%" not in host:
+        print("ip", ip, str(ip) if ip.version == 4 else f"[{ip}]")
+PY
+)
+if [[ -z $identifier ]]; then
+    if [[ -n $requested ]]; then printf '无法读取站点地址或域名无效。\n' >&2; exit 1; fi
+    exit 0
+fi
+read -r kind host authority <<<"$identifier"
+
+if [[ $kind == ip ]]; then
+    names=(--preferred-profile shortlived --ip-address "$host")
+    verify=(-verify_ip "$host")
+    default_tls=' default_server'
+    renew_before=$(( 3 * 86400 ))
+else
+    names=(-d "$host")
+    verify=(-verify_hostname "$host")
+    default_tls=
+    renew_before=$(( 30 * 86400 ))
+fi
+
+matches_certificate() {
+    [[ -s $1/fullchain.pem && -s $1/privkey.pem ]] &&
+        openssl verify -partial_chain -trusted "$1/fullchain.pem" "${verify[@]}" "$1/fullchain.pem" >/dev/null 2>&1
+}
+
+# A failed request for a new host must preserve the current certificate lineage.
+live=/etc/letsencrypt/live
+host_key=$(printf '%s' "$host" | sha256sum | cut -c1-24)
+lineage=rebates-install-$host_key
+if [[ ! -d $live/$lineage ]] && matches_certificate "$live/rebates-install"; then
+    lineage=rebates-install
+fi
+cert=$live/$lineage
+issued=false
+if ! matches_certificate "$cert" ||
+    ! openssl x509 -in "$cert/fullchain.pem" -noout -checkend "$renew_before" >/dev/null; then
+    if [[ ! -x $venv/bin/certbot ]]; then
+        /usr/bin/python3 -m venv "$venv"
+        "$venv/bin/python" -m pip --disable-pip-version-check install 'certbot>=5.4,<6'
+    fi
+    "$venv/bin/certbot" certonly --non-interactive --agree-tos --register-unsafely-without-email \
+        --webroot -w "$webroot" --cert-name "$lineage" --keep-until-expiring "${names[@]}"
+    matches_certificate "$cert" || { printf '证书与 %s 不匹配。\n' "$host" >&2; exit 1; }
+    issued=true
+fi
+
+new_config=$(mktemp -d "$parts/.tls.XXXXXXXX")
+trap 'rm -rf -- "$new_config"' EXIT
+cat >"$new_config/https-site.conf" <<EOF
+server {
+    listen 443 ssl$default_tls;
+    listen [::]:443 ssl$default_tls;
+    server_name $authority;
+    ssl_certificate $cert/fullchain.pem;
+    ssl_certificate_key $cert/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    include $parts/app.conf;
+}
+EOF
+cat >"$new_config/http-redirect.conf" <<EOF
+    if (\$uri !~ "^/\\.well-known/acme-challenge/") {
+        return 301 https://$authority\$request_uri;
+    }
+EOF
+
+files=(https-site.conf http-redirect.conf)
+restore_nginx() {
+    local file
+    for file in "${files[@]}"; do
+        if [[ -f $new_config/$file.previous ]]; then
+            mv -f -- "$new_config/$file.previous" "$parts/$file"
+        else
+            rm -f -- "$parts/$file"
+        fi
+    done
+    nginx -t && systemctl reload nginx
+}
+
+changed=false
+if ! cmp -s "$new_config/https-site.conf" "$parts/https-site.conf" ||
+    ! cmp -s "$new_config/http-redirect.conf" "$parts/http-redirect.conf"; then
+    for file in "${files[@]}"; do
+        if [[ -f $parts/$file ]]; then cp -- "$parts/$file" "$new_config/$file.previous"; fi
+    done
+    for file in "${files[@]}"; do mv -- "$new_config/$file" "$parts/$file"; done
+    changed=true
+    if ! nginx -t || ! systemctl reload nginx ||
+        ! curl -fsS --noproxy '*' --connect-to '::127.0.0.1:' --max-time 15 \
+            "https://$authority/api/v1/health" >/dev/null; then
+        restore_nginx
+        printf '新地址 HTTPS 检查失败，已恢复之前的 Nginx 配置。\n' >&2
+        exit 1
+    fi
+elif [[ $issued == true ]]; then
+    nginx -t
+    systemctl reload nginx
+fi
+
+# Write as the application account so no site-owned path is written as root.
+if ! env_change=$(runuser -u rebates-app -- /usr/bin/python3 - "$config" "$authority" <<'PY'
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+contents = path.read_text()
+updated = re.sub(r'^APP_URL="[^"]+"$', f'APP_URL="https://{sys.argv[2]}"', contents, flags=re.M)
+updated = re.sub(r'^SESSION_SECURE_COOKIE="[^"]+"$', 'SESSION_SECURE_COOKIE="true"', updated, flags=re.M)
+if updated == contents:
+    sys.exit(0)
+with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temp:
+    temp.write(updated)
+os.replace(temp.name, path)
+print("changed")
+PY
+); then
+    if [[ $changed == true ]]; then restore_nginx; fi
+    exit 1
+fi
+if [[ $env_change == changed ]]; then
+    systemctl try-restart rebates-install-queue.service
+fi
+BASH
+chmod 0755 "$ssl_helper.new"
+mv -f -- "$ssl_helper.new" "$ssl_helper"
+cat >"$ssl_service" <<EOF
+[Unit]
+Description=Issue and renew the Rebates HTTPS certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+ConditionPathExists=$site_env
+
+[Service]
+Type=oneshot
+ExecStart=$ssl_helper
+TimeoutStartSec=10min
+EOF
+cat >"$ssl_path" <<EOF
+[Unit]
+Description=Check HTTPS after browser installation
+
+[Path]
+PathChanged=$site_env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >"$ssl_timer" <<'EOF'
+[Unit]
+Description=Check the Rebates HTTPS certificate
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*-*-* *:00,15,30,45:00
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+if [[ $action == --bind-domain ]]; then
+    [[ ! -f $update_marker && -s $site_env ]] || die '请先完成安装或正在进行的升级。'
+    getent ahosts "$bind_domain" >/dev/null || die '服务器还无法解析该域名，请检查 DNS。'
+    if [[ $(dpkg-query -W -f='${Status}' python3-venv 2>/dev/null || true) != 'install ok installed' ]]; then
+        apt-get install -y python3-venv
+    fi
+    configure_nginx
+    configure_ssl
+    systemctl daemon-reload
+    step "为 $bind_domain 验证 DNS 并申请证书"
+    "$ssl_helper" "$bind_domain" || die '域名绑定失败，请确认 DNS 指向当前服务器且公网 TCP 80 和 443 已放行。'
+    systemctl enable --now rebates-install-ssl.path rebates-install-ssl.timer
+    save_deploy_command
+    printf '\n已绑定新的主域名：https://%s/\n后台：https://%s/admin/login\n' "$bind_domain" "$bind_domain"
+    exit 0
+fi
+
 if [[ $action == --update ]]; then
     upgrade_site
     save_deploy_command
@@ -437,231 +756,8 @@ $app->booted(static function (): void {
 $app->handleRequest(Request::capture());
 PHP
 
-install -d -m 0755 "$nginx_parts" "$acme_root"
-cat >"$nginx_parts/app.conf" <<EOF
-    root $app/frontend;
-    client_max_body_size 24m;
-
-    location = / { rewrite ^ /rebates-install.php last; }
-    location = /install { rewrite ^ /rebates-install.php last; }
-    location = /index.html { try_files \$uri =404; }
-    location ~ ^/(?:index|rebates-install)\.php\$ {
-        internal;
-        root $backend/public;
-        include fastcgi.conf;
-        fastcgi_pass unix:$socket;
-    }
-    location ~ /\. { return 404; }
-    location ~* \.php(?:/|\$) { return 404; }
-    location /assets/ { try_files \$uri =404; }
-    location ~ ^/(?:css|js|fonts|vendor)/ {
-        root $backend/public;
-        try_files \$uri =404;
-    }
-    location = /robots.txt {
-        root $backend/public;
-        try_files \$uri =404;
-    }
-    location / { rewrite ^ /index.php last; }
-EOF
-cat >"$nginx_site.new" <<EOF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    include $nginx_parts/http-*.conf;
-    location ^~ /.well-known/acme-challenge/ {
-        root $acme_root;
-        try_files \$uri =404;
-    }
-    include $nginx_parts/app.conf;
-}
-include $nginx_parts/https-*.conf;
-EOF
-# Ubuntu's stock default occupies port 80. Leave custom defaults in place.
-nginx_default=/etc/nginx/sites-enabled/default
-stock_default=
-if [[ -L $nginx_default && $(readlink -f "$nginx_default") == /etc/nginx/sites-available/default ]]; then
-    expected=$(dpkg-query -W -f='${Conffiles}' nginx-common | awk '$1=="/etc/nginx/sites-available/default" { print $2 }')
-    actual=$(md5sum /etc/nginx/sites-available/default | cut -d' ' -f1)
-    if [[ $actual == "$expected" ]]; then
-        stock_default=$(readlink "$nginx_default")
-        rm -- "$nginx_default"
-    fi
-fi
-if [[ -f $nginx_site ]]; then cp -- "$nginx_site" "$nginx_site.previous"; fi
-mv -- "$nginx_site.new" "$nginx_site"
-ln -sfn -- "$nginx_site" "$nginx_link"
-if ! nginx -t; then
-    if [[ -f $nginx_site.previous ]]; then
-        mv -- "$nginx_site.previous" "$nginx_site"
-    else
-        rm -f -- "$nginx_link" "$nginx_site"
-    fi
-    if [[ -n $stock_default ]]; then ln -s -- "$stock_default" "$nginx_default"; fi
-    die 'Nginx 配置校验失败，请检查 TCP 80 的默认站点配置。'
-fi
-rm -f -- "$nginx_site.previous"
-systemctl reload nginx
-
-step '配置自动 HTTPS'
-install -d -m 0755 /usr/local/libexec
-cat >"$ssl_helper" <<'BASH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-config=/var/www/rebates/backend/storage/app/private/site.env
-parts=/etc/nginx/rebates-install
-webroot=/var/www/rebates-acme
-venv=/var/lib/rebates-install/certbot
-cert=/etc/letsencrypt/live/rebates-install
-if [[ ! -s $config ]]; then exit 0; fi
-
-identifier=$(runuser -u rebates-app -- /usr/bin/python3 - "$config" <<'PY'
-import ipaddress
-import re
-import sys
-from pathlib import Path
-from urllib.parse import urlsplit
-
-env = Path(sys.argv[1]).read_text()
-match = re.search(r'^APP_URL="([^"]+)"$', env, re.M)
-if not match:
-    sys.exit(0)
-try:
-    url = urlsplit(match[1])
-    host = url.hostname
-    if url.scheme not in ("http", "https") or not host or url.username or url.password:
-        sys.exit(0)
-    if url.port not in (None, 80, 443) or url.path not in ("", "/") or url.query or url.fragment:
-        sys.exit(0)
-except ValueError:
-    sys.exit(0)
-try:
-    ip = ipaddress.ip_address(host)
-except ValueError:
-    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    if len(host) <= 253 and re.fullmatch(rf"(?:{label}\.)+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?", host):
-        print("domain", host, host)
-else:
-    if ip.is_global and not ip.is_multicast and "%" not in host:
-        print("ip", ip, str(ip) if ip.version == 4 else f"[{ip}]")
-PY
-)
-if [[ -z $identifier ]]; then exit 0; fi
-read -r kind host authority <<<"$identifier"
-
-if [[ $kind == ip ]]; then
-    names=(--preferred-profile shortlived --ip-address "$host")
-    verify=(-verify_ip "$host")
-    default_tls=' default_server'
-    renew_before=$(( 3 * 86400 ))
-else
-    names=(-d "$host")
-    verify=(-verify_hostname "$host")
-    default_tls=
-    renew_before=$(( 30 * 86400 ))
-fi
-
-issued=false
-if [[ ! -s $cert/fullchain.pem || ! -s $cert/privkey.pem ]] ||
-    ! openssl verify -partial_chain -trusted "$cert/fullchain.pem" "${verify[@]}" "$cert/fullchain.pem" >/dev/null 2>&1 ||
-    ! openssl x509 -in "$cert/fullchain.pem" -noout -checkend "$renew_before" >/dev/null; then
-    if [[ ! -x $venv/bin/certbot ]]; then
-        /usr/bin/python3 -m venv "$venv"
-        "$venv/bin/python" -m pip --disable-pip-version-check install 'certbot>=5.4,<6'
-    fi
-    "$venv/bin/certbot" certonly --non-interactive --agree-tos --register-unsafely-without-email \
-        --webroot -w "$webroot" --cert-name rebates-install --keep-until-expiring "${names[@]}"
-    issued=true
-fi
-
-if [[ ! -f $parts/https-site.conf ]]; then
-    cat >"$parts/https-site.new" <<EOF
-server {
-    listen 443 ssl$default_tls;
-    listen [::]:443 ssl$default_tls;
-    server_name $authority;
-    ssl_certificate $cert/fullchain.pem;
-    ssl_certificate_key $cert/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    include $parts/app.conf;
-}
-EOF
-    cat >"$parts/http-redirect.new" <<EOF
-    if (\$uri !~ "^/\\.well-known/acme-challenge/") {
-        return 301 https://$authority\$request_uri;
-    }
-EOF
-    mv -- "$parts/https-site.new" "$parts/https-site.conf"
-    mv -- "$parts/http-redirect.new" "$parts/http-redirect.conf"
-    if ! nginx -t || ! systemctl reload nginx; then
-        rm -f -- "$parts/https-site.conf" "$parts/http-redirect.conf"
-        exit 1
-    fi
-elif [[ $issued == true ]]; then
-    nginx -t
-    systemctl reload nginx
-fi
-
-# Keep Laravel-generated URLs and session cookie settings aligned with TLS.
-# Write as the application account so no site-owned path is written as root.
-if [[ ! -f $parts/ssl-ready ]]; then
-    runuser -u rebates-app -- /usr/bin/python3 - "$config" "$authority" <<'PY'
-import os
-import re
-import sys
-import tempfile
-from pathlib import Path
-
-path = Path(sys.argv[1])
-contents = path.read_text()
-contents = re.sub(r'^APP_URL="[^"]+"$', f'APP_URL="https://{sys.argv[2]}"', contents, flags=re.M)
-contents = re.sub(r'^SESSION_SECURE_COOKIE="[^"]+"$', 'SESSION_SECURE_COOKIE="true"', contents, flags=re.M)
-with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temp:
-    temp.write(contents)
-os.replace(temp.name, path)
-PY
-    systemctl restart rebates-install-queue.service
-    touch "$parts/ssl-ready"
-fi
-BASH
-chmod 0755 "$ssl_helper"
-cat >"$ssl_service" <<EOF
-[Unit]
-Description=Issue and renew the Rebates HTTPS certificate
-After=network-online.target nginx.service
-Wants=network-online.target
-ConditionPathExists=$site_env
-
-[Service]
-Type=oneshot
-ExecStart=$ssl_helper
-TimeoutStartSec=10min
-EOF
-cat >"$ssl_path" <<EOF
-[Unit]
-Description=Check HTTPS after browser installation
-
-[Path]
-PathChanged=$site_env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-cat >"$ssl_timer" <<'EOF'
-[Unit]
-Description=Check the Rebates HTTPS certificate
-
-[Timer]
-OnBootSec=1min
-OnCalendar=*-*-* *:00,15,30,45:00
-AccuracySec=15s
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
+configure_nginx
+configure_ssl
 
 step '配置队列和定时任务'
 cat >"$queue" <<EOF
