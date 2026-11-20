@@ -5,6 +5,7 @@ const directoryCache = new Map()
 <script setup>
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { api, imageUrl } from '../api'
+import { formatBrl } from '../money'
 import { go, restoreScroll, resume, safePath } from '../navigation'
 
 const props = defineProps({ route: { type: Object, required: true }, member: Object })
@@ -630,7 +631,7 @@ onUnmounted(() => {
           <div><dt>保障状态</dt><dd><button type="button" class="inline-action" @click="go('/protection?binding=' + bindingDetail.id)">{{ bindingStatuses[bindingDetail.protection_status] || '查看保障' }} ›</button></dd></div>
         </dl>
       </div>
-      <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">查询可兑积分</button>
+      <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">查询积分与返利</button>
       <button type="button" class="quiet" @click="go('/wallet?platform_id=' + bindingDetail.platform_id)">查看该平台的积分记录</button>
     </template>
 
@@ -703,13 +704,16 @@ onUnmounted(() => {
         <div class="quote-highlight">
           <p>{{ quote.status === 'confirmed' ? '已到账' : '预计入账' }}</p>
           <strong>{{ quote.estimated_points }}</strong><span> 积分</span>
+          <p v-if="quote.rebate_enabled">返利 {{ formatBrl(quote.rebate_cents) }}</p>
         </div>
         <dl class="platform-data">
           <div><dt>当前充值总额</dt><dd>{{ formatMoney(quote.observed_deposit_cents) }}</dd></div>
           <div><dt>当前投注额</dt><dd>{{ formatMoney(quote.observed_valid_bet_cents) }}</dd></div>
           <div><dt>本次待兑换存款</dt><dd>{{ formatMoney(quote.deposit_cents) }}</dd></div>
           <div><dt>本期有效投注额</dt><dd>{{ formatMoney(quote.valid_bet_cents) }}</dd></div>
-          <div><dt>所需投注额（{{ quote.wager_multiplier }} 倍）</dt><dd>{{ formatMoney(quote.required_bet_cents) }}</dd></div>
+          <div><dt>积分所需投注额（{{ quote.wager_multiplier }} 倍）</dt><dd>{{ formatMoney(quote.point_required_bet_cents ?? quote.required_bet_cents) }}</dd></div>
+          <div v-if="quote.rebate_enabled"><dt>返利所需投注额（{{ quote.rebate_wager_multiplier }} 倍）</dt><dd>{{ formatMoney(quote.rebate_required_bet_cents) }}</dd></div>
+          <div v-if="quote.rebate_enabled"><dt>返利比例</dt><dd>{{ Number(quote.rebate_percent) }}%</dd></div>
           <div><dt>兑换比例</dt><dd>R$ 1 = {{ quote.points_per_brl }} 积分</dd></div>
           <div><dt>上次结转积分</dt><dd>{{ quote.remainder_before }}</dd></div>
           <div><dt>本次结转积分</dt><dd>{{ quote.remainder_after }}</dd></div>
@@ -719,12 +723,13 @@ onUnmounted(() => {
           <div><dt>本次快照读取时间</dt><dd>{{ formatDate(quote.observed_at) }}</dd></div>
         </dl>
         <template v-if="quote.status === 'confirmed'">
-          <p role="status">兑换成功，积分已到账。</p>
+          <p role="status">{{ quote.rebate_enabled ? '兑换成功，积分与返利已按实兑结果入账。' : '兑换成功，积分已到账。' }}</p>
           <button class="primary" type="button" @click="go('/wallet?platform_id=' + activeBinding.platform_id)">查看积分记录</button>
+          <button v-if="quote.rebate_enabled" class="quiet" type="button" @click="go('/cash-wallet')">查看可用余额</button>
         </template>
         <template v-else>
-          <p class="muted" role="status">{{ quote.eligibility === 'eligible' && !mayConfirm ? '报价已失效，请重新查询。' : eligibility[quote.eligibility] || '当前报价不可兑换。' }}</p>
-          <button class="primary" type="button" :disabled="busy || !mayConfirm" @click="confirmPoints">确认兑换</button>
+          <p class="muted" role="status">{{ quote.eligibility === 'eligible' && !mayConfirm ? '报价已失效，请重新查询。' : quote.rebate_enabled && quote.eligibility === 'insufficient_points' ? '暂无可兑换的积分或返利。' : eligibility[quote.eligibility] || '当前报价不可兑换。' }}</p>
+          <button class="primary" type="button" :disabled="busy || !mayConfirm" @click="confirmPoints">{{ quote.rebate_enabled ? '确认兑换积分和返利' : '确认兑换' }}</button>
         </template>
       </section>
     </template>

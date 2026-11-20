@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { api } from '../api'
+import { formatBrl } from '../money'
 
 const props = defineProps({ route: Object })
 const quote = ref(null)
@@ -31,6 +32,7 @@ watch(() => props.route.params.id, (id, _previous, onCleanup) => {
   <dl v-if="quote" class="surface summary-list">
     <div><dt>状态</dt><dd>{{ statuses[quote.status] || '处理中' }}</dd></div>
     <div><dt>{{ quote.status === 'confirmed' ? '实兑积分' : '预计积分' }}</dt><dd>{{ quote.estimated_points }}</dd></div>
+    <div v-if="quote.rebate_enabled"><dt>{{ quote.status === 'confirmed' ? '实兑返利' : '预计返利' }}</dt><dd>{{ formatBrl(quote.rebate_cents) }}</dd></div>
     <div><dt>本期待兑存款</dt><dd>{{ format(quote.deposit_cents) }}</dd></div>
     <div><dt>本期有效投注</dt><dd>{{ format(quote.valid_bet_cents) }}</dd></div>
     <div><dt>所需投注额</dt><dd>{{ format(quote.required_bet_cents) }}</dd></div>

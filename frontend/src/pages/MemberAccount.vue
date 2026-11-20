@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
+import { formatBrl } from '../money'
 import { currentRoute, go, resume, safePath } from '../navigation'
 import MemberPagination from './MemberPagination.vue'
 
@@ -151,6 +152,12 @@ onMounted(load)
           <span v-if="checkin" role="status" class="muted">
             连续 {{ checkin.streak }} 天<span v-if="checkin.checked_in"> · 今日获得 {{ checkin.reward_points }} 积分</span>
           </span>
+        </div>
+      </section>
+      <section class="surface stack">
+        <div class="member-actions">
+          <div><h2>可用余额</h2><strong>{{ formatBrl(member?.available_balance_cents) }}</strong></div>
+          <button class="quiet" type="button" @click="go('/cash-wallet')">提现与记录 →</button>
         </div>
       </section>
       <section class="surface member-hero stack">

@@ -10,6 +10,7 @@ import { back, currentRoute, go, restoreScroll, resume, safePath } from './navig
 import AuthPages from './pages/AuthPages.vue'
 import ContentPages from './pages/ContentPages.vue'
 import PointQuotePage from './pages/PointQuotePage.vue'
+import CashWalletPage from './pages/CashWalletPage.vue'
 import PlatformPages from './pages/PlatformPages.vue'
 import ShopPages from './pages/ShopPages.vue'
 import MemberPages from './pages/MemberPages.vue'
@@ -32,7 +33,7 @@ const pages = [
   [/^\/platforms\/\d+\/reviews\/new$/, '写评价', PlatformPages, true],
   [/^\/platforms\/\d+\/protection$/, '保障条款', PlatformPages],
   [/^\/binding$/, '绑定平台', PlatformPages, true],
-  [/^\/points$/, '兑换积分', PlatformPages, true],
+  [/^\/points$/, '兑换积分与返利', PlatformPages, true],
   [/^\/points\/quotes\/\d+$/, '存款换积分详情', PointQuotePage, true],
   [/^\/bindings$/, '已绑定平台', PlatformPages, true],
   [/^\/bindings\/\d+$/, '绑定详情', PlatformPages, true],
@@ -43,6 +44,7 @@ const pages = [
   [/^\/shop\/redemptions\/\d+$/, '兑换详情', ShopPages, true],
   [/^\/member$/, '个人中心', MemberPages, true],
   [/^\/wallet$/, '积分钱包', MemberPages, true],
+  [/^\/cash-wallet$/, '可用余额', CashWalletPage, true],
   [/^\/wallet\/\d+$/, '积分明细', MemberPages, true],
   [/^\/address$/, '收货地址', MemberPages, true],
   [/^\/pix$/, 'Pix 收款账户', MemberPages, true],
@@ -87,8 +89,9 @@ watch([route, sessionState, member], () => {
   }
 }, { immediate: true })
 
-watch(route, async () => {
+watch(route, async (current, previous) => {
   document.title = route.value.path === '/' ? 'CASH CLUB · Slots 平台评级与返利' : title.value + ' · CASH CLUB'
+  if (current.path === '/member' && previous && member.value) refreshMember()
   if (route.value.path !== '/login') accountNotice.value = ''
   await nextTick()
   restoreScroll()
