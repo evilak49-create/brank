@@ -35,6 +35,7 @@ class ProtectionController extends Controller
         return $this->privateJson($bindings->through(fn (PlatformBinding $binding): array => [
             'id' => $binding->id, 'platform_id' => $binding->platform_id, 'platform_name' => $binding->platform->name,
             'promotion_url' => $binding->platform->promotion_url,
+            'platform_account_id' => $binding->platform_account_id,
             'masked_platform_account' => ProtectionClaims::maskAccount($binding->platform_account_id),
             'protection_status' => $binding->protection_status,
         ]));
@@ -107,6 +108,7 @@ class ProtectionController extends Controller
         $data = [
             'id' => $case->id, 'binding_id' => $case->platform_binding_id,
             'platform_id' => $case->platform_id, 'platform_name' => $case->platform_name,
+            'platform_account_id' => $case->platform_account_id,
             'masked_platform_account' => ProtectionClaims::maskAccount($case->platform_account_id),
             'protection_status' => $case->protection_status, 'term_version_id' => $case->protection_term_id,
             'amount_cents' => $case->amount_cents, 'currency' => 'BRL', 'withdrawn_at' => $case->withdrawn_at,
