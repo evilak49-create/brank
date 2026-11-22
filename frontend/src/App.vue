@@ -36,7 +36,7 @@ const pages = [
   [/^\/platforms\/\d+\/reviews\/new$/, '写评价', PlatformPages, true],
   [/^\/platforms\/\d+\/protection$/, '保障条款', PlatformPages],
   [/^\/binding$/, '绑定平台', PlatformPages, true],
-  [/^\/points$/, '兑换积分与返利', PlatformPages, true],
+  [/^\/points$/, '现金返利', PlatformPages, true],
   [/^\/points\/quotes\/\d+$/, '存款换积分详情', PointQuotePage, true],
   [/^\/bindings$/, '已绑定平台', PlatformPages, true],
   [/^\/bindings\/\d+$/, '绑定详情', PlatformPages, true],

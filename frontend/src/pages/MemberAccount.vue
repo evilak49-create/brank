@@ -182,7 +182,7 @@ onMounted(load)
       <section class="surface member-hero stack">
         <p>{{ t('可用积分') }}</p><strong>{{ balance ?? '—' }}</strong>
         <div class="member-actions">
-          <button class="primary" @click="go('/points')">{{ t('兑换积分') }}</button>
+          <button class="primary" @click="go('/points')">{{ t('现金返利') }}</button>
           <button class="quiet" @click="go('/shop')">{{ t('去商城') }}</button>
         </div>
       </section>

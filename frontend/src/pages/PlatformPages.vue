@@ -37,8 +37,7 @@ const reviewListError = ref('')
 const reviewPage = ref(1)
 const reviewLastPage = ref(1)
 const favorite = ref(false)
-const pointRule = ref(null)
-const pointRuleError = ref(false)
+const rebateTiers = computed(() => platform.value?.rebate_tiers ?? [])
 const tab = ref('reviews')
 const search = ref('')
 const listPage = ref(1)
@@ -53,7 +52,6 @@ const bindingDetail = ref(null)
 const phone = ref('')
 const code = ref('')
 const quote = ref(null)
-const quoteBinding = ref(null)
 const rating = ref(0)
 const reviewBody = ref('')
 const busy = ref(false)
@@ -74,9 +72,10 @@ const ruleNumbers = computed(() => new Intl.NumberFormat(locale.value, { maximum
 const bindingStatuses = { pending: '待确认', active: '已生效', inactive: '未生效' }
 const eligibility = {
   eligible: '已达到投注要求',
-  insufficient_wager: '当前投注额未达兑换要求',
-  insufficient_points: '暂无可兑积分',
-  no_deposit: '暂无可兑积分',
+  insufficient_wager: '当前打码未达到返利标准',
+  insufficient_rebate: '暂无可领取的返利',
+  rebate_disabled: '返利暂未开放',
+  no_deposit: '暂无可领取的返利',
   paused: '兑换暂不可用',
   stale_snapshot: '平台快照已失效，请重新查询',
   regressed: '平台数据暂不可用于兑换',
@@ -114,16 +113,6 @@ function formatDate(value) {
 
 function formatRule(value, suffix) {
   return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : ruleNumbers.value.format(value) + suffix
-}
-
-async function loadPointRule(path = platformPath.value, signal = loadRequest.signal) {
-  pointRuleError.value = false
-  try {
-    const { data } = await api(path + '/point-rule', { signal, fresh: true })
-    if (!signal.aborted) pointRule.value = data
-  } catch {
-    if (!signal.aborted) pointRuleError.value = true
-  }
 }
 
 function formatMoney(cents) {
@@ -275,8 +264,6 @@ async function initialize() {
   const path = platformPath.value
   const mode = screen.value
   platform.value = null
-  pointRule.value = null
-  pointRuleError.value = false
   terms.value = null
   selected.value = null
   bindingDetail.value = null
@@ -361,7 +348,7 @@ async function initialize() {
         const posted = props.route.query.get('review')
         if (posted === 'pending') status.value = '评价已提交，审核通过后将公开展示。'
         if (posted === 'approved') status.value = '评价已发布。'
-        const tasks = [loadPlatformReviews(1, path, signal), loadPointRule(path, signal)]
+        const tasks = [loadPlatformReviews(1, path, signal)]
         if (props.member) tasks.push(api('/platform-favorites/' + platform.value.id, { signal }).then(result => {
           if (!signal.aborted) favorite.value = result.data.favorite
         }).catch(failure => {
@@ -471,7 +458,6 @@ function queryPoints() {
     const binding = activeBinding.value
     const { data } = await api('/platform-bindings/' + binding.id + '/point-quotes', { method: 'POST' })
     if (current()) {
-      quoteBinding.value = { last_redeemed_at: binding.last_redeemed_at, redeemed_points: binding.redeemed_points }
       quote.value = data
     }
   })
@@ -486,11 +472,10 @@ function confirmPoints() {
     } catch (failure) {
       if (failure.status && failure.status < 500 && failure.status !== 409) throw failure
       result = await api(path).catch(() => { throw failure })
-      if (result.data.status === 'pending') throw failure
+      if (result.data.status === 'pending' && result.data.eligibility === 'eligible') throw failure
     }
     if (result.data.status === 'confirmed') {
       if (current()) {
-        activeBinding.value.redeemed_points += result.data.estimated_points
         activeBinding.value.last_redeemed_at = result.data.confirmed_at
       }
       emit('credited')
@@ -564,15 +549,12 @@ onUnmounted(() => {
         <div><h2>{{ t('出款保障') }}</h2><p>{{ t('符合保障条款的拒绝出款申诉，经核实后由本站赔付。') }}</p></div>
         <button class="quiet" type="button" @click="go(platformPath + '/protection')">{{ t('查看条款') }}</button>
       </section>
-      <dl v-if="!pointRuleError" class="platform-rules" :aria-label="t('积分与返利规则', 'Regras de pontos e cashback')">
-        <div><dt>{{ t('积分比例', 'Pontos por real') }}</dt><dd>{{ formatRule(pointRule?.points_per_brl, ' / R$ 1') }}</dd></div>
-        <div><dt>{{ t('投注要求', 'Apostas para pontos') }}</dt><dd>{{ formatRule(pointRule?.wager_multiplier, '×') }}</dd></div>
-        <div><dt>{{ t('返利比例', 'Percentual de cashback') }}</dt><dd>{{ formatRule(pointRule?.rebate_percent, '%') }}</dd></div>
-        <div><dt>{{ t('流水要求', 'Apostas para cashback') }}</dt><dd>{{ formatRule(pointRule?.rebate_wager_multiplier, '×') }}</dd></div>
+      <dl class="platform-rules" :aria-label="t('返利规则', 'Regras de cashback')">
+        <div><dt>{{ t('最低打码倍数要求', 'Multiplicador mínimo de apostas') }}</dt><dd>{{ formatRule(platform.min_rebate_wager_multiplier, '×') }}</dd></div>
+        <div><dt>{{ t('最高返利', 'Cashback máximo') }}</dt><dd>{{ formatRule(platform.max_rebate_percent, '%') }}</dd></div>
       </dl>
-      <button v-else class="quiet" type="button" @click="loadPointRule()">{{ t('规则加载失败，点击重试', 'Regras indisponíveis. Tentar novamente') }}</button>
       <nav class="segmented platform-tabs" :aria-label="t('平台详情')">
-        <button v-for="[value, label] in [['reviews', t('用户评价')], ['description', t('平台简介')], ['offers', t('优惠活动')]]" :key="value" type="button" :aria-pressed="tab === value" @click="tab = value">{{ label }}</button>
+        <button v-for="[value, label] in [['reviews', t('用户评价')], ['description', t('平台简介')], ['rebate', t('返利规则')]]" :key="value" type="button" :aria-pressed="tab === value" @click="tab = value">{{ label }}</button>
       </nav>
       <section v-if="tab === 'reviews'" class="stack" :aria-label="t('用户评价')">
         <div class="surface review-summary">
@@ -597,7 +579,19 @@ onUnmounted(() => {
         <p class="preserved">{{ platform.description || t('暂无平台简介。') }}</p>
         <p class="muted">{{ t('暂未提供独立官网链接。') }}</p>
       </section>
-      <section v-else class="surface muted message">{{ t('暂无优惠活动。') }}</section>
+      <section v-else class="surface stack platform-content">
+        <table v-if="rebateTiers.length" class="rebate-table">
+          <thead><tr>
+            <th scope="col">{{ t('最低打码倍数要求', 'Multiplicador mínimo de apostas') }}</th>
+            <th scope="col">{{ t('返利比例', 'Percentual de cashback') }}</th>
+          </tr></thead>
+          <tbody><tr v-for="tier in rebateTiers" :key="tier.wager_multiplier">
+            <td>{{ formatRule(tier.wager_multiplier, '×') }}</td>
+            <td>{{ formatRule(tier.rebate_percent, '%') }}</td>
+          </tr></tbody>
+        </table>
+        <p v-else class="muted">{{ t('返利暂未开放') }}</p>
+      </section>
       <div class="platform-actions">
         <button class="quiet" type="button" :aria-pressed="favorite" :disabled="busy" @click="toggleFavorite">{{ favorite ? t('已收藏') : t('收藏') }}</button>
         <a v-if="promotion" class="primary" :href="promotion" target="_blank" rel="noopener noreferrer">{{ t('通过本站注册') }} <span aria-hidden="true">↗</span></a>
@@ -662,7 +656,7 @@ onUnmounted(() => {
           <div><dt>{{ t('保障状态') }}</dt><dd><button type="button" class="inline-action" @click="go('/protection?binding=' + bindingDetail.id)">{{ t(bindingStatuses[bindingDetail.protection_status]) || t('查看保障') }} ›</button></dd></div>
         </dl>
       </div>
-      <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">{{ t('查询积分与返利') }}</button>
+      <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">{{ t('查询返利', 'Consultar cashback') }}</button>
       <button type="button" class="quiet" @click="go('/wallet?platform_id=' + bindingDetail.platform_id)">{{ t('查看该平台的积分记录') }}</button>
     </template>
 
@@ -727,40 +721,34 @@ onUnmounted(() => {
           <button class="primary" :disabled="busy || !bindingVerification || (bindingUsesImage && !bindingCaptcha)">{{ t('确认绑定') }}</button>
         </form>
         <template v-else-if="selected && screen === 'points'">
-          <p class="muted">{{ t('请先绑定该平台账号，再查询可兑积分。') }}</p>
+          <p class="muted">{{ t('请先绑定该平台账号，再查询返利。', 'Vincule sua conta para consultar o cashback.') }}</p>
           <button class="primary" type="button" @click="go(bindPath(selected.id, '/points?platform=' + selected.id))">{{ t('去绑定') }}</button>
         </template>
       </section>
       <section v-if="screen === 'points' && quote && activeBinding" class="surface stack platform-content quote-result">
         <div class="quote-highlight">
           <p>{{ quote.status === 'confirmed' ? t('已到账') : t('预计入账') }}</p>
-          <strong>{{ quote.estimated_points }}</strong><span> {{ t('积分') }}</span>
-          <p v-if="quote.rebate_enabled">{{ t('返利') }} {{ formatBrl(quote.rebate_cents) }}</p>
+          <strong>{{ formatBrl(quote.rebate_cents) }}</strong>
         </div>
         <dl class="platform-data">
           <div><dt>{{ t('当前充值总额') }}</dt><dd>{{ formatMoney(quote.observed_deposit_cents) }}</dd></div>
           <div><dt>{{ t('当前投注额') }}</dt><dd>{{ formatMoney(quote.observed_valid_bet_cents) }}</dd></div>
           <div><dt>{{ t('本次待兑换存款') }}</dt><dd>{{ formatMoney(quote.deposit_cents) }}</dd></div>
           <div><dt>{{ t('本期有效投注额') }}</dt><dd>{{ formatMoney(quote.valid_bet_cents) }}</dd></div>
-          <div><dt>{{ t('积分所需投注额（' + quote.wager_multiplier + ' 倍）', 'Apostas exigidas para pontos (' + quote.wager_multiplier + '×)') }}</dt><dd>{{ formatMoney(quote.point_required_bet_cents ?? quote.required_bet_cents) }}</dd></div>
           <div v-if="quote.rebate_enabled"><dt>{{ t('返利所需投注额（' + quote.rebate_wager_multiplier + ' 倍）', 'Apostas exigidas para cashback (' + quote.rebate_wager_multiplier + '×)') }}</dt><dd>{{ formatMoney(quote.rebate_required_bet_cents) }}</dd></div>
           <div v-if="quote.rebate_enabled"><dt>{{ t('返利比例') }}</dt><dd>{{ Number(quote.rebate_percent) }}%</dd></div>
-          <div><dt>{{ t('兑换比例') }}</dt><dd>R$ 1 = {{ quote.points_per_brl }} {{ t('积分') }}</dd></div>
-          <div><dt>{{ t('上次结转积分') }}</dt><dd>{{ quote.remainder_before }}</dd></div>
-          <div><dt>{{ t('本次结转积分') }}</dt><dd>{{ quote.remainder_after }}</dd></div>
-          <div><dt>{{ t('历史已兑换') }}</dt><dd>{{ quoteBinding.redeemed_points }} {{ t('积分') }}</dd></div>
-          <div><dt>{{ t('上次兑换时间') }}</dt><dd>{{ formatDate(quoteBinding.last_redeemed_at) }}</dd></div>
+          <div v-if="quote.matched_rebate_wager_multiplier != null"><dt>{{ t('命中打码档位', 'Faixa de apostas atingida') }}</dt><dd>{{ formatRule(quote.matched_rebate_wager_multiplier, '×') }}</dd></div>
           <div><dt>{{ t('基线快照读取时间') }}</dt><dd>{{ formatDate(quote.baseline_observed_at) }}</dd></div>
           <div><dt>{{ t('本次快照读取时间') }}</dt><dd>{{ formatDate(quote.observed_at) }}</dd></div>
         </dl>
         <template v-if="quote.status === 'confirmed'">
-          <p role="status">{{ quote.rebate_enabled ? t('兑换成功，积分与返利已按实兑结果入账。') : t('兑换成功，积分已到账。') }}</p>
-          <button class="primary" type="button" @click="go('/wallet?platform_id=' + activeBinding.platform_id)">{{ t('查看积分记录') }}</button>
+          <p role="status">{{ t('已到账返利') }}</p>
           <button v-if="quote.rebate_enabled" class="quiet" type="button" @click="go('/cash-wallet')">{{ t('查看可用余额') }}</button>
         </template>
         <template v-else>
-          <p class="muted" role="status">{{ quote.eligibility === 'eligible' && !mayConfirm ? t('报价已失效，请重新查询。') : quote.rebate_enabled && quote.eligibility === 'insufficient_points' ? t('暂无可兑换的积分或返利。') : t(eligibility[quote.eligibility]) || t('当前报价不可兑换。') }}</p>
-          <button class="primary" type="button" :disabled="busy || !mayConfirm" @click="confirmPoints">{{ quote.rebate_enabled ? t('确认兑换积分和返利') : t('确认兑换') }}</button>
+          <p v-if="mayConfirm" class="muted">{{ t('确认领取时按平台最新数据计算返利。', 'O cashback será recalculado com os dados mais recentes da plataforma ao confirmar.') }}</p>
+          <p v-else class="muted" role="status">{{ quote.eligibility === 'eligible' ? t('报价已失效，请重新查询。') : t(eligibility[quote.eligibility]) || t('当前报价不可兑换。') }}</p>
+          <button class="primary" type="button" :disabled="busy || !mayConfirm" @click="confirmPoints">{{ t('确认领取返利', 'Confirmar cashback') }}</button>
         </template>
       </section>
     </template>

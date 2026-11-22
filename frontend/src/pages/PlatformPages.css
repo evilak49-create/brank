@@ -49,8 +49,6 @@
 .platform-rules {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, auto);
-  grid-auto-flow: column;
   gap: 5px 10px;
   margin: 0;
   padding: 8px 10px;
@@ -60,7 +58,7 @@
   font-size: 11px;
 }
 .platform-rules > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 1px 5px; }
-.platform-rules > div:nth-child(n+3) { border-inline-start: 1px solid #a691cf38; padding-inline-start: 10px; }
+.platform-rules > div + div { border-inline-start: 1px solid #a691cf38; padding-inline-start: 10px; }
 .platform-rules dt { color: #f0eaff; font-weight: 700; }
 .platform-rules dd {
   margin: 0;
@@ -70,7 +68,13 @@
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.platform-rules > div:nth-child(n+3) dd { color: #ffe281; }
+.platform-rules > div + div dd { color: #ffe281; }
+.rebate-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rebate-table th, .rebate-table td { padding: 7px 4px; text-align: start; }
+.rebate-table th { color: var(--muted); font-size: 12px; }
+.rebate-table tbody tr { border-top: 1px solid var(--line); }
+.rebate-table :is(th, td):last-child { text-align: end; }
+.rebate-table td:last-child { color: var(--highlight); font-weight: 750; }
 .platform-heading { min-width: 0; }
 .platform-heading h1 { font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
 .minor { font-size: 12px; }
