@@ -11,6 +11,8 @@ import { api, imageUrl } from '../api'
 import { formatBrl } from '../money'
 import { go, restoreScroll, resume, safePath } from '../navigation'
 
+import PlatformRechargeHistory from './PlatformRechargeHistory.vue'
+
 const { locale, t } = useLocale()
 
 const props = defineProps({ route: { type: Object, required: true }, member: Object })
@@ -39,6 +41,11 @@ const reviewLastPage = ref(1)
 const favorite = ref(false)
 const rebateTiers = computed(() => platform.value?.rebate_tiers ?? [])
 const tab = ref('reviews')
+const bindingTab = ref('summary')
+const bindingTabs = [
+  ['summary', '绑定信息', 'Conta vinculada'],
+  ['recharges', '充值记录', 'Histórico de depósitos'],
+]
 const search = ref('')
 const listPage = ref(1)
 const listLastPage = ref(1)
@@ -106,6 +113,16 @@ const promotion = computed(() => {
     return ''
   }
 })
+
+function moveTab(event, index, tabs, prefix, select) {
+  const last = tabs.length - 1
+  const indexes = { ArrowLeft: index ? index - 1 : last, ArrowRight: index === last ? 0 : index + 1, Home: 0, End: last }
+  if (!Object.hasOwn(indexes, event.key)) return
+  event.preventDefault()
+  const next = tabs[indexes[event.key]][0]
+  select(next)
+  document.getElementById(prefix + next)?.focus()
+}
 
 function formatDate(value) {
   return value ? date.value.format(new Date(value)) : t('暂无记录')
@@ -267,6 +284,7 @@ async function initialize() {
   terms.value = null
   selected.value = null
   bindingDetail.value = null
+  bindingTab.value = 'summary'
   error.value = ''
   loadError.value = ''
   busy.value = false
@@ -649,15 +667,28 @@ onUnmounted(() => {
     <template v-else-if="screen === 'bindingDetail' && bindingDetail">
       <div class="surface stack platform-content">
         <div class="platform-heading"><h2>{{ bindingDetail.platform_name }}</h2><p class="muted">{{ bindingDetail.masked_platform_account }}</p></div>
-        <dl class="platform-data">
-          <div><dt>{{ t('绑定时间') }}</dt><dd>{{ formatDate(bindingDetail.created_at) }}</dd></div>
-          <div><dt>{{ t('历史已兑换') }}</dt><dd>{{ bindingDetail.redeemed_points }} {{ t('积分') }}</dd></div>
-          <div><dt>{{ t('上次兑换时间') }}</dt><dd>{{ formatDate(bindingDetail.last_redeemed_at) }}</dd></div>
-          <div><dt>{{ t('保障状态') }}</dt><dd><button type="button" class="inline-action" @click="go('/protection?binding=' + bindingDetail.id)">{{ t(bindingStatuses[bindingDetail.protection_status]) || t('查看保障') }} ›</button></dd></div>
-        </dl>
       </div>
-      <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">{{ t('查询返利', 'Consultar cashback') }}</button>
-      <button type="button" class="quiet" @click="go('/wallet?platform_id=' + bindingDetail.platform_id)">{{ t('查看该平台的积分记录') }}</button>
+      <div class="surface segmented platform-tabs binding-tabs" role="tablist" :aria-label="t('已绑定平台', 'Plataforma vinculada')">
+        <button v-for="([value, label, translation], index) in bindingTabs" :id="'binding-tab-' + value" :key="value"
+          type="button" role="tab" :aria-selected="bindingTab === value" :aria-controls="'binding-panel-' + value"
+          :tabindex="bindingTab === value ? 0 : -1" @click="bindingTab = value"
+          @keydown="moveTab($event, index, bindingTabs, 'binding-tab-', next => bindingTab = next)">{{ t(label, translation) }}</button>
+      </div>
+      <section v-show="bindingTab === 'summary'" id="binding-panel-summary" class="stack" role="tabpanel" aria-labelledby="binding-tab-summary" tabindex="0">
+        <div class="surface stack platform-content">
+          <dl class="platform-data">
+            <div><dt>{{ t('绑定时间') }}</dt><dd>{{ formatDate(bindingDetail.created_at) }}</dd></div>
+            <div><dt>{{ t('历史已兑换') }}</dt><dd>{{ bindingDetail.redeemed_points }} {{ t('积分') }}</dd></div>
+            <div><dt>{{ t('上次兑换时间') }}</dt><dd>{{ formatDate(bindingDetail.last_redeemed_at) }}</dd></div>
+            <div><dt>{{ t('保障状态') }}</dt><dd><button type="button" class="inline-action" @click="go('/protection?binding=' + bindingDetail.id)">{{ t(bindingStatuses[bindingDetail.protection_status]) || t('查看保障') }} ›</button></dd></div>
+          </dl>
+        </div>
+        <button type="button" class="primary" @click="go('/points?binding=' + bindingDetail.id)">{{ t('查询返利', 'Consultar cashback') }}</button>
+        <button type="button" class="quiet" @click="go('/wallet?platform_id=' + bindingDetail.platform_id)">{{ t('查看该平台的积分记录') }}</button>
+      </section>
+      <section v-show="bindingTab === 'recharges'" id="binding-panel-recharges" role="tabpanel" aria-labelledby="binding-tab-recharges" tabindex="0">
+        <PlatformRechargeHistory v-if="bindingTab === 'recharges'" :binding-id="bindingDetail.id" />
+      </section>
     </template>
 
     <template v-else-if="screen === 'bind' || screen === 'points'">

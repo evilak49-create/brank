@@ -159,3 +159,5 @@
   .protection-banner { grid-template-columns: auto minmax(0, 1fr); }
   .protection-banner .quiet { grid-column: 2; justify-self: start; }
 }
+
+.binding-tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
