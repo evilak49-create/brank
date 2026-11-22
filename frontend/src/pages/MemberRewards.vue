@@ -31,7 +31,8 @@ const cpf = ref('')
 const inviteInput = ref(null)
 const linkVisible = ref(false)
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-const statuses = { pending: '待审核', processing: '处理中', paid: '已到账', rejected: '未通过', failed: '提现失败', unresolved: '结果待确认' }
+const statuses = { pending: '待审核', processing: '处理中', paid: '已到账', rejected: '未通过', cancelled: '已取消，款项已退回', failed: '提现失败', unresolved: '结果待确认' }
+const withdrawalStatusLabel = order => t(order.rejection_deducted ? '已拒绝，款项已扣除' : statuses[order.status]) || order.status
 const round = computed(() => packets.value?.round)
 const pageCopy = computed(() => packets.value?.page_copy)
 const ready = computed(() => canWithdraw(round.value))
@@ -281,7 +282,7 @@ onMounted(load)
           <li v-for="record in records.data" :key="record.id">
             <button @click="go(home + '/withdrawals/' + record.id)">
               <span><strong>{{ money(record.amount_cents) }}</strong><small>{{ date(record.created_at) }}</small></span>
-              <span>{{ t(statuses[record.status]) || record.status }} ›</span>
+              <span>{{ withdrawalStatusLabel(record) }} ›</span>
             </button>
           </li>
         </ul>
@@ -343,11 +344,11 @@ onMounted(load)
         <div><dt>{{ t('申请金额') }}</dt><dd>{{ money(order.amount_cents) }}</dd></div>
         <div><dt>Pix CPF</dt><dd>{{ order.masked_cpf }}</dd></div>
         <div><dt>{{ t('申请时间') }}</dt><dd>{{ date(order.created_at) }}</dd></div>
-        <div><dt>{{ t('处理状态') }}</dt><dd>{{ t(statuses[order.status]) || order.status }}</dd></div>
+        <div><dt>{{ t('处理状态') }}</dt><dd>{{ withdrawalStatusLabel(order) }}</dd></div>
         <div v-if="order.paid_at"><dt>{{ t('到账时间') }}</dt><dd>{{ date(order.paid_at) }}</dd></div>
         <div v-if="order.review_reason"><dt>{{ t('处理说明') }}</dt><dd>{{ order.review_reason }}</dd></div>
       </dl>
-      <div v-if="['failed', 'rejected'].includes(order.status)" class="member-actions">
+      <div v-if="!order.rejection_deducted && ['failed', 'rejected', 'cancelled'].includes(order.status)" class="member-actions">
         <button class="quiet" @click="go('/pix')">{{ t('核对收款账户') }}</button>
         <button class="quiet" @click="go(home)">{{ t('返回红包') }}</button>
       </div>

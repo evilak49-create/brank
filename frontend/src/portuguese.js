@@ -131,6 +131,8 @@ export const portuguese = {
   "已过期": "Expirado",
   "已连续签到": "Sequência de",
   "已驳回，已退回": "Recusado e devolvido",
+  "已取消，款项已退回": "Cancelado, valor devolvido",
+  "已拒绝，款项已扣除": "Recusado, valor descontado",
   "巴西手机号": "Celular brasileiro",
   "帮助中心": "Central de ajuda",
   "帮助中心加载失败": "Falha ao carregar a central de ajuda",
